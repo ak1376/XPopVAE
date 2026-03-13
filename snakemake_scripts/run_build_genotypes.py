@@ -4,7 +4,21 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.build_genotypes_for_vae import BuildGenotypesArgs, build_genotypes_for_vae
+from src.build_genotypes import BuildGenotypesArgs, build_genotypes_for_vae
+
+'''
+python -u snakemake_scripts/run_build_genotypes.py \
+  --tree simulations/0/rep0/tree_sequence.trees \
+  --phenotype simulations/0/rep0/phenotype.pkl \
+  --outdir genotypes/0/rep0 \
+  --experiment-config-json config_files/experiment_config_IM_symmetric.json \
+  --maf-threshold 0.05 \
+  --subset-mode random \
+  --subset-seed 0 \
+  --val-frac 0.2 \
+  --split-seed 0 \
+  --subset-snps 5000
+'''
 
 
 def _str2bool(x: str) -> bool:

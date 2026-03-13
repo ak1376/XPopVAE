@@ -147,7 +147,7 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
 
     # -------------------------------------------------------------------------
     # CRITICAL: Drop SNPs monomorphic in discovery_train BEFORE normalization.
-    # This prevents HWE scale clipping (e.g. 0.001) from creating ~1000 values.
+    # TODO: There should be no monomorphic sites to begin with ... 
     # -------------------------------------------------------------------------
     num_snps_before = int(G_subset.shape[1])
     G_disc_train = G_subset[disc_train_idx]
