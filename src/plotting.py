@@ -3,38 +3,60 @@ import torch
 from sklearn.decomposition import PCA
 
 
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
+
+from sklearn.metrics import roc_curve, auc, balanced_accuracy_score
+from sklearn.preprocessing import label_binarize
+
+
 @torch.no_grad()
-def plot_reconstruction(model, dataloader, device, output_dir, sample_idx=0):
+def plot_reconstruction(model, dataloader, device, output_dir):
     model.eval()
+    os.makedirs(output_dir, exist_ok=True)
 
     x_batch, _ = next(iter(dataloader))
     x_batch = x_batch.to(device)
-    x_recon, mu, logvar, z = model(x_batch)
 
-    x_true = x_batch[sample_idx, 0].cpu().numpy()
-    x_hat = x_recon[sample_idx, 0].cpu().numpy()
+    logits, mu, logvar, z = model(x_batch)  # logits shape: (B, 3, L)
 
-    plt.figure(figsize=(12, 4))
-    plt.plot(x_true, label="true")
-    plt.plot(x_hat, label="reconstruction")
-    plt.legend()
-    plt.xlabel("position")
-    plt.ylabel("value")
-    plt.title(f"Sample {sample_idx}: true vs reconstruction")
+    # True labels: (B, L)
+    y_true = x_batch.long().squeeze(1).cpu().numpy()
+
+    # Predicted probabilities: (B, 3, L) -> (B, L, 3)
+    probs = F.softmax(logits, dim=1).permute(0, 2, 1).cpu().numpy()
+
+    # Hard predictions for balanced accuracy
+    y_pred = np.argmax(probs, axis=-1)
+
+    # Flatten across batch and sequence positions
+    y_true_flat = y_true.reshape(-1)
+    y_pred_flat = y_pred.reshape(-1)
+    probs_flat = probs.reshape(-1, probs.shape[-1])  # (N_positions_total, 3)
+
+    # Balanced accuracy on hard predictions
+    bal_acc = balanced_accuracy_score(y_true_flat, y_pred_flat)
+
+    # Binarize labels for multiclass ROC
+    classes = np.array([0, 1, 2])
+    y_true_bin = label_binarize(y_true_flat, classes=classes)  # (N, 3)
+
+    # Micro-average ROC
+    fpr, tpr, _ = roc_curve(y_true_bin.ravel(), probs_flat.ravel())
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure(figsize=(6, 6))
+    plt.plot(fpr, tpr, label=f"Micro-average ROC (AUC = {roc_auc:.3f})")
+    plt.plot([0, 1], [0, 1], linestyle="--")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"Reconstruction ROC | AUC = {roc_auc:.3f} | Balanced Acc = {bal_acc:.3f}")
+    plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/reconstruction_sample_{sample_idx}.png")
-    plt.close()
-
-    plt.figure(figsize=(5, 5))
-    plt.scatter(x_true, x_hat, alpha=0.3, s=10)
-    min_val = min(x_true.min(), x_hat.min())
-    max_val = max(x_true.max(), x_hat.max())
-    plt.plot([min_val, max_val], [min_val, max_val], linestyle="--")
-    plt.xlabel("true values")
-    plt.ylabel("reconstructed values")
-    plt.title("Pointwise true vs reconstructed")
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/reconstruction_scatter_sample_{sample_idx}.png")
+    plt.savefig(f"{output_dir}/reconstruction_roc.png")
     plt.close()
 
 

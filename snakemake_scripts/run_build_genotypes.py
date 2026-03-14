@@ -8,8 +8,8 @@ from src.build_genotypes import BuildGenotypesArgs, build_genotypes_for_vae
 
 '''
 python -u snakemake_scripts/run_build_genotypes.py \
-  --tree simulations/0/rep0/tree_sequence.trees \
-  --phenotype simulations/0/rep0/phenotype.pkl \
+  --tree experiments/IM_symmetric/simulations/0/rep0/tree_sequence.trees \
+  --phenotype experiments/IM_symmetric/simulations/0/rep0/phenotype.pkl \
   --outdir genotypes/0/rep0 \
   --experiment-config-json config_files/experiment_config_IM_symmetric.json \
   --maf-threshold 0.05 \

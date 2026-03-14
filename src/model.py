@@ -12,6 +12,7 @@ class ConvVAE(nn.Module):
         stride,
         padding,
         latent_dim,
+        num_classes=3,
         use_batchnorm=False,
         activation="elu",
     ):
@@ -24,6 +25,7 @@ class ConvVAE(nn.Module):
         self.stride = stride
         self.padding = padding
         self.latent_dim = latent_dim
+        self.num_classes = num_classes
         self.use_batchnorm = use_batchnorm
         self.activation = activation
         self.encoder_lengths = [input_length]
@@ -74,10 +76,12 @@ class ConvVAE(nn.Module):
         current_length = self.encoder_lengths[-1]
 
         for i, target_length in enumerate(target_lengths):
-            if i < len(decoder_channels) - 1:
+            is_last = i == len(target_lengths) - 1
+
+            if not is_last:
                 current_out = decoder_channels[i + 1]
             else:
-                current_out = in_channels
+                current_out = num_classes
 
             base_length = (current_length - 1) * stride - 2 * padding + kernel_size
             output_padding = target_length - base_length
@@ -99,7 +103,7 @@ class ConvVAE(nn.Module):
                 )
             )
 
-            if i < len(target_lengths) - 1:
+            if not is_last:
                 if use_batchnorm:
                     dec_layers.append(nn.BatchNorm1d(current_out))
                 dec_layers.append(self._get_activation())
@@ -145,6 +149,9 @@ class ConvVAE(nn.Module):
 
         mu = self.fc_mu(h_flat)
         logvar = self.fc_logvar(h_flat)
+
+        logvar = torch.clamp(logvar, min=-6.0, max=6.0)
+
         z = self.reparameterize(mu, logvar)
 
         h_dec = self.fc_decode(z)
@@ -156,9 +163,10 @@ class ConvVAE(nn.Module):
             if verbose:
                 print(f"Decoder layer {i:02d} ({layer.__class__.__name__}): {out.shape}")
 
-        if out.shape != x.shape:
+        expected_shape = (x.size(0), self.num_classes, x.size(2))
+        if out.shape != expected_shape:
             raise ValueError(
-                f"Decoder output shape {out.shape} does not match input shape {x.shape}"
+                f"Decoder output shape {out.shape} does not match expected logits shape {expected_shape}"
             )
 
         return out, mu, logvar, z

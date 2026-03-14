@@ -32,7 +32,6 @@ def main():
     learning_rate = float(vae_config['training']['lr'])
     batch_size = int(vae_config['training']['batch_size'])
     num_epochs = int(vae_config['training']['max_epochs'])
-    n_samples = 4000
 
     training_dataset_torch = torch.tensor(training_dataset, dtype=torch.float32)
     training_dataset_torch = training_dataset_torch.unsqueeze(1)
@@ -49,6 +48,12 @@ def main():
     out_path = Path("model_outputs")
     out_path.mkdir(exist_ok=True)
 
+    # Visualize one batch of training data
+    a = next(iter(train_loader))[0]  # Get the first batch of inputs
+    print("Batch shape:", a.shape)  # Should be (batch_size, 1, 7183)
+    print("Batch dtype:", a.dtype)  # Should be torch.float32
+    print("Batch min/max:", a.min().item(), a.max().item())
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
@@ -63,6 +68,22 @@ def main():
         use_batchnorm=False,
         activation="elu",
     ).to(device)
+
+    # Let's print the number of parameters to make sure it's not too large
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"Number of parameters in the model: {num_params}")
+
+    # Pass one batch through the model with shape tracing
+    x_batch = next(iter(train_loader))[0].to(device)
+
+    with torch.no_grad():
+        logits, mu, logvar, z = model(x_batch, verbose=True)
+
+    print("\nFinal outputs:")
+    print("logits shape:", logits.shape)   # expected: (B, 3, 7183)
+    print("mu shape:", mu.shape)           # expected: (B, latent_dim)
+    print("logvar shape:", logvar.shape)   # expected: (B, latent_dim)
+    print("z shape:", z.shape)             # expected: (B, latent_dim)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -98,14 +119,12 @@ def main():
         print(
             f"Epoch {epoch + 1:03d}/{num_epochs} | "
             f"train_loss={train_loss:.6f} | "
-            f"train_recon={train_recon:.6f} | "
             f"train_kl={train_kl:.6f} | "
             f"val_loss={val_loss:.6f} | "
-            f"val_recon={val_recon:.6f} | "
             f"val_kl={val_kl:.6f}"
         )
 
-    plot_reconstruction(model, val_loader, device, output_dir=out_path, sample_idx=0)
+    plot_reconstruction(model, val_loader, device, output_dir=out_path)
     plot_latent_space(model, val_loader, device, output_dir=out_path)
     plot_loss_curves(
         train_losses=train_losses,
