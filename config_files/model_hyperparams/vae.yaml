@@ -25,13 +25,13 @@ training:
 masking:
   enabled: true
   use_mask_channel: true
-  alpha_masked: 0.8
+  alpha_masked: 1.0
   mode: "contiguous"
   constraint_mode: "frac_and_len" # frac_and_blocks, frac_and_len, block_and_len
   n_blocks: null
   allow_overlap: false
-  mask_frac: 0.8
-  block_len: 5
+  mask_frac: 0.15
+  block_len: 200
   fill: "constant"
   gaussian_std: 0.0
   constant_value: -1.0

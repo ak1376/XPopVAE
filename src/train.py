@@ -1,24 +1,36 @@
 import torch
+from src.loss import recon_unmasked_loss, recon_masked_loss, kl_loss
 
-
-def train_one_epoch(model, dataloader, optimizer, device, loss_fn, beta=1.0):
+def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha=1.0, beta=1.0):
     model.train()
 
     total_loss = 0.0
-    total_recon_loss = 0.0
+    total_recon_unmasked = 0.0
+    total_recon_masked = 0.0
     total_kl_loss = 0.0
 
     for x, _ in dataloader:
         x = x.to(device)
 
+        # dynamic masking: fresh every batch, every epoch
+        masked_x, mask = masker.mask(x)
+        masked_x = masked_x.to(device)
+        mask = mask.to(device)
+
         optimizer.zero_grad()
 
-        x_logits, mu, logvar, z = model(x)
-        loss, recon_loss, kl_loss = loss_fn(
-            x=x,
-            logits=x_logits,
-            mu=mu,
-            logvar=logvar,
+        logits, mu, logvar, z = model(masked_x)
+        targets = x.squeeze(1).long()             # [B, X]
+
+        recon_unmasked = recon_unmasked_loss(logits, targets, mask)
+        recon_masked = recon_masked_loss(logits, targets, mask)
+        kl = kl_loss(mu, logvar)
+
+        loss, recon_unmasked_val, recon_masked_val, kl_val = loss_fn(
+            recon_unmasked=recon_unmasked,
+            recon_masked=recon_masked,
+            kl=kl,
+            alpha=alpha,
             beta=beta,
         )
 
@@ -27,52 +39,57 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, beta=1.0):
         optimizer.step()
 
         total_loss += loss.item()
-        total_recon_loss += recon_loss.item()
-        total_kl_loss += kl_loss.item()
-
-        # print("mu abs mean:", mu.abs().mean().item())
-        # print("mu abs max:", mu.abs().max().item())
-        # print("logvar mean:", logvar.mean().item())
-        # print("logvar max:", logvar.max().item())
-        # print("logvar min:", logvar.min().item())
-        # print("logits abs max:", x_logits.abs().max().item())
-
+        total_recon_unmasked += recon_unmasked_val.item()
+        total_recon_masked += recon_masked_val.item()
+        total_kl_loss += kl_val.item()
 
     n_batches = len(dataloader)
     return (
         total_loss / n_batches,
-        total_recon_loss / n_batches,
+        total_recon_unmasked / n_batches,
+        total_recon_masked / n_batches,
         total_kl_loss / n_batches,
     )
 
-
 @torch.no_grad()
-def evaluate(model, dataloader, device, loss_fn, beta=1.0):
+def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0):
     model.eval()
 
     total_loss = 0.0
-    total_recon_loss = 0.0
+    total_recon_unmasked = 0.0
+    total_recon_masked = 0.0
     total_kl_loss = 0.0
 
-    for x, _ in dataloader:
+    for masked_x, x, mask, _ in dataloader:
+        masked_x = masked_x.to(device)
         x = x.to(device)
+        mask = mask.to(device)
 
-        logits, mu, logvar, z = model(x)
-        loss, recon_loss, kl_loss = loss_fn(
-            x=x,
-            logits=logits,
-            mu=mu,
-            logvar=logvar,
+        logits, mu, logvar, z = model(masked_x)
+        targets = x.squeeze(1).long()
+
+
+        recon_unmasked = recon_unmasked_loss(logits, targets, mask)
+        recon_masked = recon_masked_loss(logits, targets, mask)
+        kl = kl_loss(mu, logvar)
+
+        loss, recon_unmasked_val, recon_masked_val, kl_val = loss_fn(
+            recon_unmasked=recon_unmasked,
+            recon_masked=recon_masked,
+            kl=kl,
+            alpha=alpha,
             beta=beta,
         )
 
         total_loss += loss.item()
-        total_recon_loss += recon_loss.item()
-        total_kl_loss += kl_loss.item()
+        total_recon_unmasked += recon_unmasked_val.item()
+        total_recon_masked += recon_masked_val.item()
+        total_kl_loss += kl_val.item()
 
     n_batches = len(dataloader)
     return (
         total_loss / n_batches,
-        total_recon_loss / n_batches,
+        total_recon_unmasked / n_batches,
+        total_recon_masked / n_batches,
         total_kl_loss / n_batches,
     )

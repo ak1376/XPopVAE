@@ -10,9 +10,9 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.loss import vae_loss
 from src.model import ConvVAE
-from src.plotting import plot_latent_space, plot_loss_curves, plot_reconstruction
+from src.plotting import plot_latent_space, plot_loss_curves, plot_reconstruction, plot_example_masked_input_heatmap, plot_latent_pca_shared_basis
 from src.train import evaluate, train_one_epoch
-
+from src.masking import Masker
 
 def extract_mu(model, dataloader, device):
     model.eval()
@@ -20,7 +20,16 @@ def extract_mu(model, dataloader, device):
     labels_all = []
 
     with torch.no_grad():
-        for x, y in dataloader:
+        for batch in dataloader:
+            if len(batch) == 2:
+                # training-style loader: (x, label)
+                x, y = batch
+            elif len(batch) == 4:
+                # val/test-style loader: (masked_x, x_true, mask, label)
+                x, _, _, y = batch
+            else:
+                raise ValueError(f"Unexpected batch structure of length {len(batch)}")
+
             x = x.to(device)
             logits, mu, logvar, z = model(x)
             mu_all.append(mu.cpu().numpy())
@@ -29,58 +38,6 @@ def extract_mu(model, dataloader, device):
     mu_all = np.concatenate(mu_all, axis=0)
     labels_all = np.concatenate(labels_all, axis=0)
     return mu_all, labels_all
-
-
-def plot_latent_pca_shared_basis(
-    reference_mu,
-    ceu_mu,
-    yri_mu,
-    output_path,
-    reference_name="CEU discovery train",
-    ceu_name="CEU validation",
-    yri_name="YRI target",
-):
-    # Fit scaler on reference only
-    scaler = StandardScaler()
-    reference_mu_scaled = scaler.fit_transform(reference_mu)
-    ceu_mu_scaled = scaler.transform(ceu_mu)
-    yri_mu_scaled = scaler.transform(yri_mu)
-
-    # Fit PCA on reference only
-    pca = PCA(n_components=2)
-    pca.fit(reference_mu_scaled)
-
-    ceu_pca = pca.transform(ceu_mu_scaled)
-    yri_pca = pca.transform(yri_mu_scaled)
-
-    explained = pca.explained_variance_ratio_
-
-    plt.figure(figsize=(7, 6))
-    plt.scatter(
-        ceu_pca[:, 0],
-        ceu_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=ceu_name,
-    )
-    plt.scatter(
-        yri_pca[:, 0],
-        yri_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=yri_name,
-    )
-
-    plt.xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
-    plt.ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
-    plt.title(f"Latent PCA\nfit on {reference_name}, both projected")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-
-    print(f"Saved shared-basis PCA plot to: {output_path}")
-
 
 def main():
     # Load in the datasets
@@ -105,9 +62,34 @@ def main():
     batch_size = int(vae_config["training"]["batch_size"])
     num_epochs = int(vae_config["training"]["max_epochs"])
 
-    training_dataset_torch = torch.tensor(training_dataset, dtype=torch.float32).unsqueeze(1)
+    # Masking hyperparameters:
+    alpha = float(vae_config['masking']['alpha_masked'])
+    block_length = int(vae_config['masking']['block_len'])
+    mask_frac = float(vae_config['masking']['mask_frac'])
+
+    masker = Masker(block_length=block_length, mask_fraction=mask_frac)
+
+    training_dataset_torch = torch.tensor(training_dataset, dtype=torch.float32).unsqueeze(1)  # add channel dim
     validation_dataset_torch = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
     target_dataset_torch = torch.tensor(target_dataset, dtype=torch.float32).unsqueeze(1)
+
+    # Precompute the masked dataset for validation (NOT training)
+    masked_val_x, val_mask = masker.mask(validation_dataset_torch)
+    masked_target_x, target_mask = masker.mask(target_dataset_torch)
+
+    # Plot one example masked input
+    out_path = Path("model_outputs")
+    out_path.mkdir(exist_ok=True)
+
+    plot_example_masked_input_heatmap(
+        original_x=validation_dataset_torch,
+        masked_x=masked_val_x,
+        mask=val_mask,
+        output_path=out_path / "example_masked_input_heatmap_val.png",
+        sample_indices=(0, 1, 2, 3, 4),
+        snp_start=0,
+        snp_count=1000,
+    )
 
     # Dummy labels:
     # 0 = CEU/discovery
@@ -115,11 +97,20 @@ def main():
     training_dataset_torch = TensorDataset(
         training_dataset_torch, torch.zeros(len(training_dataset_torch), dtype=torch.long)
     )
+
     validation_dataset_torch = TensorDataset(
-        validation_dataset_torch, torch.zeros(len(validation_dataset_torch), dtype=torch.long)
+        masked_val_x,                 # masked input
+        validation_dataset_torch,     # original input (reconstruction target)
+        val_mask,                     # binary mask
+        torch.zeros(len(validation_dataset_torch), dtype=torch.long)  # label
     )
+
+    # Should this use a different mask than the validation set? Or no mask at all? 
     target_dataset_torch = TensorDataset(
-        target_dataset_torch, torch.ones(len(target_dataset_torch), dtype=torch.long)
+        masked_target_x,              # masked input
+        target_dataset_torch,        # original input (reconstruction target)
+        target_mask,                 # binary mask
+        torch.ones(len(target_dataset_torch), dtype=torch.long)  # label
     )
 
     train_loader = DataLoader(training_dataset_torch, batch_size=batch_size, shuffle=True)
@@ -167,40 +158,50 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    train_losses, train_recon_losses, train_kl_losses = [], [], []
-    val_losses, val_recon_losses, val_kl_losses = [], [], []
+    train_loss_list, train_recon_unmasked_list, train_recon_masked_list, train_kl_list = [], [], [], []
+    val_loss_list, val_recon_unmasked_list, val_recon_masked_list, val_kl_list = [], [], [], []
+
+    masker = Masker(block_length=50, mask_fraction=0.2)
 
     for epoch in range(num_epochs):
-        train_loss, train_recon, train_kl = train_one_epoch(
+        train_loss, train_recon_unmasked, train_recon_masked, train_kl = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
             device=device,
             loss_fn=vae_loss,
+            masker=masker,
             beta=beta,
+            alpha = alpha
         )
 
-        val_loss, val_recon, val_kl = evaluate(
+        val_loss, val_recon_unmasked, val_recon_masked, val_kl = evaluate(
             model=model,
             dataloader=val_loader,
             device=device,
             loss_fn=vae_loss,
             beta=beta,
+            alpha = alpha
         )
 
-        train_losses.append(train_loss)
-        train_recon_losses.append(train_recon)
-        train_kl_losses.append(train_kl)
+        train_loss_list.append(train_loss)
+        train_recon_unmasked_list.append(train_recon_unmasked)
+        train_recon_masked_list.append(train_recon_masked)
+        train_kl_list.append(train_kl)
 
-        val_losses.append(val_loss)
-        val_recon_losses.append(val_recon)
-        val_kl_losses.append(val_kl)
+        val_loss_list.append(val_loss)
+        val_recon_unmasked_list.append(val_recon_unmasked)
+        val_recon_masked_list.append(val_recon_masked)
+        val_kl_list.append(val_kl)
+        
 
         print(
             f"Epoch {epoch + 1:03d}/{num_epochs} | "
-            f"train_loss={train_loss:.6f} | "
+            f"train_recon_unmasked={train_recon_unmasked:.6f} | "
+            f"train_recon_masked={train_recon_masked:.6f} | "
             f"train_kl={train_kl:.6f} | "
-            f"val_loss={val_loss:.6f} | "
+            f"val_recon_unmasked={val_recon_unmasked:.6f} | "
+            f"val_recon_masked={val_recon_masked:.6f} | "
             f"val_kl={val_kl:.6f}"
         )
 
@@ -208,27 +209,30 @@ def main():
     plot_reconstruction(model, val_loader, device, output_dir=out_path)
     plot_latent_space(model, val_loader, device, output_dir=out_path)
     plot_loss_curves(
-        train_losses=train_losses,
-        val_losses=val_losses,
-        train_recon_losses=train_recon_losses,
-        val_recon_losses=val_recon_losses,
-        train_kl_losses=train_kl_losses,
-        val_kl_losses=val_kl_losses,
+        train_losses=train_loss_list,
+        val_losses=val_loss_list,
+        train_recon_unmasked_losses=train_recon_unmasked_list,
+        train_recon_masked_losses=train_recon_masked_list,
+        val_recon_unmasked_losses=val_recon_unmasked_list,
+        val_recon_masked_losses=val_recon_masked_list,
+        train_kl_losses=train_kl_list,
+        val_kl_losses=val_kl_list,
         output_dir=out_path,
     )
 
     # Evaluate on target dataset
-    target_loss, target_recon, target_kl = evaluate(
+    target_loss, target_recon_unmasked, target_recon_masked, target_kl = evaluate(
         model=model,
         dataloader=target_loader,
         device=device,
         loss_fn=vae_loss,
+        alpha=alpha,
         beta=beta,
     )
-
     print("\nTarget set evaluation:")
     print(f"target_loss  = {target_loss:.6f}")
-    print(f"target_recon = {target_recon:.6f}")
+    print(f"target_recon_unmasked = {target_recon_unmasked:.6f}")
+    print(f"target_recon_masked   = {target_recon_masked:.6f}")
     print(f"target_kl    = {target_kl:.6f}")
 
     target_out_path = out_path / "target"
