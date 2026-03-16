@@ -2,3 +2,4 @@ scratch/investigating_cnn_model.py
 experiments/
 model_outputs/
 src/__pycache__/
+.snakemake/
