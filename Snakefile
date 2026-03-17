@@ -274,6 +274,13 @@ rule all:
                exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_truth_vs_reconstructed.png",
                exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+               exp_id=EXP_IDS),
+
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_truth_vs_reconstructed.png",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_summary.txt",
+               exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
                exp_id=EXP_IDS),
 
@@ -382,7 +389,7 @@ rule train_vae:
             --outputs {params.outdir}
         """
 
-rule compare_ld_decay:
+rule compare_ld_decay_discovery:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=DISCOVERY_VAL,
@@ -396,6 +403,7 @@ rule compare_ld_decay:
         output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_discovery_val",
         batch_size=128,
         max_distance=100,
+        label="discovery_val",
         title=lambda wc: f"LD decay: Discovery Val truth vs reconstructed ({wc.exp_id})",
     shell:
         r"""
@@ -405,9 +413,41 @@ rule compare_ld_decay:
             --output-dir {params.output_dir} \
             --batch-size {params.batch_size} \
             --max-distance {params.max_distance} \
-            --title "{params.title}"
+            --label {params.label} \
+            --title "{params.title}" \
+            --include-metrics-in-title
         """
 
+
+rule compare_ld_decay_target:
+    input:
+        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        genotype_npy=TARGET,
+        script=COMPARE_LD_SCRIPT,
+    output:
+        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_summary.txt",
+    params:
+        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target",
+        batch_size=128,
+        max_distance=100,
+        label="target_yri",
+        title=lambda wc: f"LD decay: Target/YRI truth vs reconstructed ({wc.exp_id})",
+    shell:
+        r"""
+        python {input.script} \
+            --checkpoint {input.checkpoint} \
+            --genotype-npy {input.genotype_npy} \
+            --output-dir {params.output_dir} \
+            --batch-size {params.batch_size} \
+            --max-distance {params.max_distance} \
+            --label {params.label} \
+            --title "{params.title}" \
+            --include-metrics-in-title
+        """
+        
 rule diagnose_allelefreq_vs_ld:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",

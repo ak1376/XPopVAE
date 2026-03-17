@@ -59,7 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--title",
         type=str,
         default="LD decay: truth vs reconstructed",
-        help="Plot title.",
+        help="Base plot title.",
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default="eval",
+        help="Short label for this evaluation, e.g. discovery_val or target_yri",
+    )
+    parser.add_argument(
+        "--include-metrics-in-title",
+        action="store_true",
+        help="If set, append MAE / RMSE / bias to the plot title.",
     )
     return parser
 
@@ -93,24 +104,6 @@ def reconstruct_argmax_genotypes(
     device: torch.device,
     batch_size: int = 128,
 ) -> np.ndarray:
-    """
-    Reconstruct genotype matrix using argmax genotype calls.
-
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Trained ConvVAE
-    G : np.ndarray
-        Input genotype matrix, shape (n_individuals, n_snps)
-    device : torch.device
-    batch_size : int
-
-    Returns
-    -------
-    np.ndarray
-        Reconstructed hard genotype calls, shape (n_individuals, n_snps),
-        values in {0,1,2}
-    """
     X = torch.tensor(G, dtype=torch.float32).unsqueeze(1)  # (N,1,L)
     ds = TensorDataset(X)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
@@ -120,36 +113,14 @@ def reconstruct_argmax_genotypes(
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, mu, logvar, z = model(x)          # (B,3,L)
-            pred = torch.argmax(logits, dim=1)        # (B,L)
+            logits, mu, logvar, z = model(x)   # (B,3,L)
+            pred = torch.argmax(logits, dim=1) # (B,L)
             recon_batches.append(pred.cpu().numpy())
 
     return np.concatenate(recon_batches, axis=0)
 
 
 def compute_ld_decay_by_lag(G: np.ndarray, max_distance: int = 100) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Compute mean r^2 by SNP lag in a vectorized way.
-
-    For each lag d:
-      compare G[:, :-d] vs G[:, d:]
-      compute column-wise Pearson r^2 across individuals
-      average across SNP pairs at that lag
-
-    Parameters
-    ----------
-    G : np.ndarray
-        Genotype matrix of shape (n_individuals, n_snps)
-    max_distance : int
-        Maximum SNP lag
-
-    Returns
-    -------
-    distances : np.ndarray
-        Array [1, 2, ..., max_distance]
-    mean_r2 : np.ndarray
-        Mean r^2 at each lag
-    """
     G = np.asarray(G, dtype=np.float32)
     n_individuals, n_snps = G.shape
 
@@ -157,21 +128,16 @@ def compute_ld_decay_by_lag(G: np.ndarray, max_distance: int = 100) -> tuple[np.
     distances = np.arange(1, max_distance + 1, dtype=int)
     mean_r2 = np.full(max_distance, np.nan, dtype=np.float64)
 
-    # loop over lag only; inside each lag is vectorized over all SNP pairs
     for idx, d in enumerate(distances):
-        X = G[:, :-d]   # shape (N, M)
-        Y = G[:, d:]    # shape (N, M)
-        # M = number of SNP pairs at this lag
+        X = G[:, :-d]
+        Y = G[:, d:]
 
-        # column means
         X_mean = X.mean(axis=0, keepdims=True)
         Y_mean = Y.mean(axis=0, keepdims=True)
 
-        # centered
         Xc = X - X_mean
         Yc = Y - Y_mean
 
-        # column variances / stds
         X_var = np.mean(Xc * Xc, axis=0)
         Y_var = np.mean(Yc * Yc, axis=0)
 
@@ -181,11 +147,43 @@ def compute_ld_decay_by_lag(G: np.ndarray, max_distance: int = 100) -> tuple[np.
 
         cov = np.mean(Xc[:, valid] * Yc[:, valid], axis=0)
         r = cov / np.sqrt(X_var[valid] * Y_var[valid])
-        r2 = r ** 2
+        r2 = r**2
 
         mean_r2[idx] = np.mean(r2)
 
     return distances, mean_r2
+
+
+def compute_curve_metrics(truth_r2: np.ndarray, recon_r2: np.ndarray) -> dict[str, float]:
+    valid = np.isfinite(truth_r2) & np.isfinite(recon_r2)
+    if not np.any(valid):
+        return {
+            "mae": np.nan,
+            "rmse": np.nan,
+            "bias": np.nan,
+            "max_abs_err": np.nan,
+            "corr": np.nan,
+        }
+
+    diff = recon_r2[valid] - truth_r2[valid]
+
+    mae = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff**2)))
+    bias = float(np.mean(diff))
+    max_abs_err = float(np.max(np.abs(diff)))
+
+    if np.sum(valid) >= 2:
+        corr = float(np.corrcoef(truth_r2[valid], recon_r2[valid])[0, 1])
+    else:
+        corr = np.nan
+
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "bias": bias,
+        "max_abs_err": max_abs_err,
+        "corr": corr,
+    }
 
 
 def save_ld_curve_arrays(
@@ -193,14 +191,30 @@ def save_ld_curve_arrays(
     distances: np.ndarray,
     truth_r2: np.ndarray,
     recon_r2: np.ndarray,
+    metrics: dict[str, float],
 ) -> None:
     np.savez(
         output_path,
         distances=distances,
         truth_mean_r2=truth_r2,
         recon_mean_r2=recon_r2,
+        mae=metrics["mae"],
+        rmse=metrics["rmse"],
+        bias=metrics["bias"],
+        max_abs_err=metrics["max_abs_err"],
+        corr=metrics["corr"],
     )
     print(f"Saved LD curve arrays to: {output_path}")
+
+
+def make_title(base_title: str, metrics: dict[str, float], include_metrics: bool) -> str:
+    if not include_metrics:
+        return base_title
+    return (
+        f"{base_title}\n"
+        f"MAE={metrics['mae']:.4f} | RMSE={metrics['rmse']:.4f} | "
+        f"bias={metrics['bias']:.4f} | corr={metrics['corr']:.4f}"
+    )
 
 
 def plot_ld_decay(
@@ -270,12 +284,21 @@ def main():
     if not np.array_equal(distances, distances2):
         raise RuntimeError("Distance arrays do not match.")
 
+    metrics = compute_curve_metrics(truth_r2, recon_r2)
+
     curves_npz = args.output_dir / "ld_decay_curves.npz"
     save_ld_curve_arrays(
         output_path=curves_npz,
         distances=distances,
         truth_r2=truth_r2,
         recon_r2=recon_r2,
+        metrics=metrics,
+    )
+
+    full_title = make_title(
+        base_title=args.title,
+        metrics=metrics,
+        include_metrics=args.include_metrics_in_title,
     )
 
     plot_path = args.output_dir / "ld_decay_truth_vs_reconstructed.png"
@@ -284,22 +307,34 @@ def main():
         truth_r2=truth_r2,
         recon_r2=recon_r2,
         output_path=plot_path,
-        title=args.title,
+        title=full_title,
     )
 
-    # small text summary
     summary_path = args.output_dir / "ld_decay_summary.txt"
     with open(summary_path, "w") as f:
+        f.write(f"Label: {args.label}\n")
         f.write(f"Checkpoint: {args.checkpoint}\n")
         f.write(f"Genotype input: {args.genotype_npy}\n")
         f.write(f"Shape: {G_truth.shape}\n")
         f.write(f"Max distance: {args.max_distance}\n")
         f.write("\n")
-        f.write("First 10 distances / truth / recon:\n")
+        f.write("Curve discorrespondence metrics\n")
+        f.write(f"MAE:         {metrics['mae']:.8f}\n")
+        f.write(f"RMSE:        {metrics['rmse']:.8f}\n")
+        f.write(f"Bias:        {metrics['bias']:.8f}\n")
+        f.write(f"MaxAbsError: {metrics['max_abs_err']:.8f}\n")
+        f.write(f"Correlation: {metrics['corr']:.8f}\n")
+        f.write("\n")
+        f.write("First 10 distances / truth / recon / diff:\n")
         for d, t, r in zip(distances[:10], truth_r2[:10], recon_r2[:10]):
-            f.write(f"{d}\t{t:.6f}\t{r:.6f}\n")
+            f.write(f"{d}\t{t:.6f}\t{r:.6f}\t{(r-t):.6f}\n")
 
     print(f"Saved summary to: {summary_path}")
+    print(
+        f"[{args.label}] LD metrics: "
+        f"MAE={metrics['mae']:.6f}, RMSE={metrics['rmse']:.6f}, "
+        f"bias={metrics['bias']:.6f}, corr={metrics['corr']:.6f}"
+    )
 
 
 if __name__ == "__main__":
