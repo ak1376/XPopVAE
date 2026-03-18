@@ -125,6 +125,8 @@ def main(
     learning_rate = float(vae_config["training"]["lr"])
     batch_size = int(vae_config["training"]["batch_size"])
     num_epochs = int(vae_config["training"]["max_epochs"])
+    patience = int(vae_config["training"].get("patience", 20))
+    min_delta = float(vae_config["training"].get("min_delta", 1e-4))
 
     alpha = float(vae_config["masking"]["alpha_masked"])
     block_length = int(vae_config["masking"]["block_len"])
@@ -151,6 +153,12 @@ def main(
     # Precompute masked dataset for validation / target
     masked_val_x, val_mask = masker.mask(validation_dataset_torch)
     masked_target_x, target_mask = masker.mask(target_dataset_torch)
+
+    # Save the pre-masked validation and target datasets for later analysis
+    np.save(out / "masked_validation_dataset.npy", masked_val_x.numpy())
+    np.save(out / "validation_masks.npy", val_mask.numpy())
+    np.save(out / "masked_target_dataset.npy", masked_target_x.numpy())
+    np.save(out / "target_masks.npy", target_mask.numpy())
 
     # Diagnostic mask plot
     plot_example_masked_input_heatmap(
@@ -244,6 +252,8 @@ def main(
     best_val_loss = float("inf")
     best_model_path = checkpoint_dir / "best_model.pt"
     final_model_path = checkpoint_dir / "final_model.pt"
+    epochs_without_improvement = 0
+    best_epoch = 0
 
     # fresh masker for train-time dynamic masking
     masker = Masker(block_length=block_length, mask_fraction=mask_frac)
@@ -284,6 +294,8 @@ def main(
 
         print(
             f"Epoch {epoch + 1:03d}/{num_epochs} | "
+            f"train_loss={train_loss:.6f} | "
+            f"val_loss={val_loss:.6f} | "
             f"train_recon_unmasked={train_recon_unmasked:.6f} | "
             f"train_recon_masked={train_recon_masked:.6f} | "
             f"train_kl={train_kl:.6f} | "
@@ -292,8 +304,11 @@ def main(
             f"val_kl={val_kl:.6f}"
         )
 
-        if val_loss < best_val_loss:
+        if val_loss < (best_val_loss - min_delta):
             best_val_loss = val_loss
+            best_epoch = epoch + 1
+            epochs_without_improvement = 0
+
             save_checkpoint(
                 path=best_model_path,
                 model=model,
@@ -303,13 +318,25 @@ def main(
                 vae_config=vae_config,
                 input_length=input_length,
             )
+            print(f"  Saved new best model at epoch {epoch + 1} (val_loss={val_loss:.6f})")
+        else:
+            epochs_without_improvement += 1
+            print(
+                f"  No validation-loss improvement for {epochs_without_improvement} epoch(s) "
+                f"(best={best_val_loss:.6f} at epoch {best_epoch})"
+            )
 
-    # Save final model after all training
+        if epochs_without_improvement >= patience:
+            print(f"Early stopping triggered at epoch {epoch + 1}")
+            break
+
+    stopped_epoch = len(train_loss_list)
+    # Save final model after all training / early stopping
     save_checkpoint(
         path=final_model_path,
         model=model,
         optimizer=optimizer,
-        epoch=num_epochs,
+        epoch=stopped_epoch,
         val_loss=val_loss_list[-1],
         vae_config=vae_config,
         input_length=input_length,
@@ -329,6 +356,14 @@ def main(
         val_kl_losses=np.array(val_kl_list),
     )
     print(f"Saved training history to: {history_path}")
+
+    # Reload best model before downstream plots/evaluation
+    best_checkpoint = torch.load(best_model_path, map_location=device)
+    model.load_state_dict(best_checkpoint["model_state_dict"])
+    print(
+        f"Reloaded best model from epoch {best_checkpoint['epoch']} "
+        f"with val_loss={best_checkpoint['val_loss']:.6f}"
+    )
 
     # ------------------------------------------------------------------
     # plots: validation

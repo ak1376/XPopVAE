@@ -1,6 +1,7 @@
 import torch
 from src.loss import recon_unmasked_loss, recon_masked_loss, kl_loss
 
+
 def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha=1.0, beta=1.0):
     model.train()
 
@@ -20,7 +21,7 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         optimizer.zero_grad()
 
         logits, mu, logvar, z = model(masked_x)
-        targets = x.squeeze(1).long()             # [B, X]
+        targets = x.squeeze(1).long()
 
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked = recon_masked_loss(logits, targets, mask)
@@ -51,6 +52,7 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         total_kl_loss / n_batches,
     )
 
+
 @torch.no_grad()
 def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0):
     model.eval()
@@ -67,7 +69,6 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0):
 
         logits, mu, logvar, z = model(masked_x)
         targets = x.squeeze(1).long()
-
 
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked = recon_masked_loss(logits, targets, mask)
@@ -93,3 +94,21 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0):
         total_recon_masked / n_batches,
         total_kl_loss / n_batches,
     )
+
+
+class EarlyStopping:
+    def __init__(self, patience=20, min_delta=1e-4):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float("inf")
+        self.num_bad_epochs = 0
+
+    def step(self, val_loss):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.num_bad_epochs = 0
+            return True, False   # improved, should_stop
+        else:
+            self.num_bad_epochs += 1
+            should_stop = self.num_bad_epochs >= self.patience
+            return False, should_stop
