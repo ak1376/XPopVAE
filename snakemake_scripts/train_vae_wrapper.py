@@ -318,7 +318,7 @@ def main(
                 vae_config=vae_config,
                 input_length=input_length,
             )
-            print(f"  Saved new best model at epoch {epoch + 1} (val_loss={val_loss:.6f})")
+            # print(f"  Saved new best model at epoch {epoch + 1} (val_loss={val_loss:.6f})")
         else:
             epochs_without_improvement += 1
             print(
