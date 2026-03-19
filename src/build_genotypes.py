@@ -50,13 +50,21 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
     """
     End-to-end builder:
       - Load TS + phenotype
-      - Filter sites (biallelic, non-missing, monomorphic removed globally, optional MAF)
-      - Subset window
+      - Filter sites globally for structural validity only:
+          * biallelic
+          * non-missing
+          * globally non-monomorphic
+      - Extract diploid / haplotype matrices
       - Align phenotype to genotype rows
       - Split discovery into train/val and define target (non-discovery)
-      - Drop SNPs monomorphic in discovery_train (prevents tiny HWE scale -> huge standardized values)
-      - Fit HWE normalizer on discovery_train only
+      - Subset window
+      - Filter SNPs using discovery_train only:
+          * remove monomorphic-in-discovery_train
+          * if maf_threshold > 0, apply discovery_train MAF filter
       - Save arrays + metadata
+
+    Output filenames are intentionally kept the same to avoid breaking workflow
+    expectations in downstream Snakemake rules.
     """
     outdir = Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -76,25 +84,39 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
 
     discovery_pop = _resolve_discovery_pop(a.discovery_pop, a.experiment_config_json)
 
-    print(f"[build_genotypes_for_vae] maf_threshold={maf_threshold} (monomorphic always removed globally)")
+    print(
+        "[build_genotypes_for_vae] "
+        f"maf_threshold={maf_threshold} "
+        "(biallelic/nonmissing/global-nonmonomorphic filter first; "
+        "MAF filter applied on discovery_train only)"
+    )
     print(f"[build_genotypes_for_vae] discovery_pop={discovery_pop}")
     print(f"[build_genotypes_for_vae] loading ts: {a.tree}")
 
     ts = tskit.load(str(a.tree))
 
+    # -------------------------------------------------------------------------
     # Basic TS site stats (raw)
+    # -------------------------------------------------------------------------
     stats = compute_site_stats(ts)
     (outdir / "genotype_site_stats.txt").write_text(_format_site_stats(a.tree, stats))
 
-    # Extract/filter to biallelic + maf + (global) non-monomorphic
-    hap1, hap2, G, kept_ind_ids, filt, kept_positions_bp, kept_site_ids = _extract_haps_and_diploid(
-        ts, maf_threshold=float(maf_threshold)
-    )
+    # -------------------------------------------------------------------------
+    # Extract/filter to:
+    #   - biallelic
+    #   - non-missing
+    #   - globally non-monomorphic
+    #
+    # No MAF filter here. MAF filtering happens later on discovery_train only.
+    # -------------------------------------------------------------------------
+    hap1, hap2, G, kept_ind_ids, filt, kept_positions_bp, kept_site_ids = _extract_haps_and_diploid(ts)
     (outdir / "site_filter_report.txt").write_text(
         "\n".join([f"{k}: {v}" for k, v in filt.items()]) + "\n"
     )
 
+    # -------------------------------------------------------------------------
     # Load + align phenotype/meta
+    # -------------------------------------------------------------------------
     pheno = pd.read_pickle(a.phenotype)
     pheno = _align_pheno_to_kept_inds(ts, pheno, kept_ind_ids, G.shape[0])
 
@@ -104,7 +126,31 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
                 f"phenotype.pkl must include column '{col}'. Columns found: {list(pheno.columns)}"
             )
 
-    # Subset window (AFTER site filtering)
+    # Meta aligned to genotype rows
+    meta = pheno[["individual_id", "population", "phenotype"]].copy()
+    meta.to_pickle(outdir / "meta.pkl")
+
+    hap_meta = _build_hap_meta(meta, has_hap2=(hap2 is not None))
+    hap_meta.to_pickle(outdir / "hap_meta.pkl")
+
+    # -------------------------------------------------------------------------
+    # Split: discovery -> train/val; target = non-discovery
+    # -------------------------------------------------------------------------
+    disc_train_idx, disc_val_idx, target_idx = _make_discovery_train_val_target_split(
+        meta=meta,
+        discovery_pop=discovery_pop,
+        val_frac=float(a.val_frac),
+        seed=int(a.split_seed),
+    )
+
+    # Save indices (same filenames as before)
+    np.save(outdir / "discovery_train_idx.npy", disc_train_idx.astype(np.int64))
+    np.save(outdir / "discovery_val_idx.npy", disc_val_idx.astype(np.int64))
+    np.save(outdir / "target_idx.npy", target_idx.astype(np.int64))
+
+    # -------------------------------------------------------------------------
+    # Subset window (AFTER global structural filtering, BEFORE discovery-train MAF)
+    # -------------------------------------------------------------------------
     num_sites = G.shape[1]
     start, end = _choose_subset_indices(
         kept_positions_bp=kept_positions_bp,
@@ -125,41 +171,46 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
     kept_site_ids_subset = kept_site_ids[start:end].astype(np.int32)
     snp_idx = np.arange(start, end, dtype=np.int64)
 
-    # Meta aligned to genotype rows
-    meta = pheno[["individual_id", "population", "phenotype"]].copy()
-    meta.to_pickle(outdir / "meta.pkl")
-
-    hap_meta = _build_hap_meta(meta, has_hap2=True)
-    hap_meta.to_pickle(outdir / "hap_meta.pkl")
-
-    # Split: discovery -> train/val; target = non-discovery
-    disc_train_idx, disc_val_idx, target_idx = _make_discovery_train_val_target_split(
-        meta=meta,
-        discovery_pop=discovery_pop,
-        val_frac=float(a.val_frac),
-        seed=int(a.split_seed),
-    )
-
-    # Save indices (row indices only; safe to save before/after SNP filtering)
-    np.save(outdir / "discovery_train_idx.npy", disc_train_idx.astype(np.int64))
-    np.save(outdir / "discovery_val_idx.npy", disc_val_idx.astype(np.int64))
-    np.save(outdir / "target_idx.npy", target_idx.astype(np.int64))
-
     # -------------------------------------------------------------------------
-    # CRITICAL: Drop SNPs monomorphic in discovery_train BEFORE normalization.
-    # TODO: There should be no monomorphic sites to begin with ... 
+    # CRITICAL: define feature set using discovery_train only.
+    #
+    # A site may be polymorphic globally but monomorphic in discovery_train.
+    # We therefore:
+    #   1) remove monomorphic sites in discovery_train
+    #   2) if maf_threshold > 0, remove sites with low MAF in discovery_train
+    #
+    # We keep the legacy filename "train_mono_filter_report.txt" so downstream
+    # workflow expectations remain unchanged.
     # -------------------------------------------------------------------------
     num_snps_before = int(G_subset.shape[1])
-    G_disc_train = G_subset[disc_train_idx]
 
-    p_train = G_disc_train.mean(axis=0, dtype=np.float64) / 2.0
-    keep_cols = (p_train > 0.0) & (p_train < 1.0)
+    G_disc_train_pre = G_subset[disc_train_idx]  # diploid dosages 0/1/2
+    p_train = G_disc_train_pre.mean(axis=0, dtype=np.float64) / 2.0
+    maf_train = np.minimum(p_train, 1.0 - p_train)
+
+    # Start by removing monomorphic-in-discovery_train columns
+    keep_cols = maf_train > 0.0
+    num_mono_removed = int((maf_train == 0.0).sum())
+
+    # Then optionally apply discovery_train MAF threshold
+    num_maf_removed = 0
+    min_ac_implied = None
+    if maf_threshold is not None and maf_threshold > 0.0:
+        n_disc_train_haps = 2 * int(G_disc_train_pre.shape[0])
+        min_ac_implied = int(math.ceil(float(maf_threshold) * n_disc_train_haps))
+
+        before = int(keep_cols.sum())
+        keep_cols &= (maf_train >= float(maf_threshold))
+        after = int(keep_cols.sum())
+        num_maf_removed = before - after
 
     if int(keep_cols.sum()) == 0:
         raise RuntimeError(
-            "All SNPs are monomorphic in discovery_train after subsetting/filtering. Nothing left to train on."
+            "All SNPs were removed by discovery_train filtering. "
+            f"subset_start={start}, subset_end={end}, maf_threshold={maf_threshold}"
         )
 
+    # Apply same SNP mask to all rows / outputs
     G_subset = G_subset[:, keep_cols]
     hap1_subset = hap1_subset[:, keep_cols]
     if hap2_subset is not None:
@@ -170,15 +221,22 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
     snp_idx = snp_idx[keep_cols]
 
     num_snps_after = int(G_subset.shape[1])
+
+    # Keep same filename as original script
     (outdir / "train_mono_filter_report.txt").write_text(
         f"num_snps_before={num_snps_before}\n"
         f"num_snps_after={num_snps_after}\n"
         f"num_dropped={num_snps_before - num_snps_after}\n"
+        f"num_monomorphic_removed={num_mono_removed}\n"
+        f"num_maf_removed={num_maf_removed}\n"
+        f"maf_threshold={maf_threshold}\n"
+        f"num_discovery_train_individuals={G_disc_train_pre.shape[0]}\n"
+        f"num_discovery_train_haplotypes={2 * G_disc_train_pre.shape[0]}\n"
+        f"min_allele_count_implied={min_ac_implied}\n"
     )
 
     # -------------------------------------------------------------------------
-    # Save SNP-aligned "raw" arrays AFTER train-monomorphic filtering
-    # (so raw + normalized all refer to the same SNP column set)
+    # Save SNP-aligned "raw" arrays AFTER discovery_train filtering
     # -------------------------------------------------------------------------
     np.save(outdir / "all_individuals.npy", G_subset)
     np.save(outdir / "hap1.npy", hap1_subset)
@@ -191,7 +249,8 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
     np.save(outdir / "variant_site_ids.npy", kept_site_ids_subset)
     np.save(outdir / "ts_individual_ids.npy", kept_ind_ids.astype(np.int64))
 
-    G_disc_train = G_subset[disc_train_idx]  # recompute after SNP filtering
+    # Split outputs after final SNP filtering
+    G_disc_train = G_subset[disc_train_idx]
     G_disc_val = G_subset[disc_val_idx]
     G_target = G_subset[target_idx]
 
@@ -215,6 +274,7 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
         "pop_counts": meta["population"].astype(str).value_counts().to_dict(),
         "normalize": False,
         "norm_mode": "af_residual",
+        # Keep legacy keys for compatibility
         "num_snps_before_train_mono_filter": num_snps_before,
         "num_snps_after_train_mono_filter": num_snps_after,
     }
@@ -283,14 +343,22 @@ def _choose_subset_indices(
 ) -> Tuple[int, int]:
     if subset_bp is not None:
         start, end = _choose_bp_window(
-            kept_positions_bp, subset_bp=float(subset_bp), subset_mode=subset_mode, seed=subset_seed
+            kept_positions_bp,
+            subset_bp=float(subset_bp),
+            subset_mode=subset_mode,
+            seed=subset_seed,
         )
     else:
         start, end = _choose_contiguous_block(num_sites, subset_snps, subset_mode, seed=subset_seed)
     return start, end
 
 
-def _choose_contiguous_block(num_sites: int, subset_snps: int, subset_mode: str, seed: int = 0) -> Tuple[int, int]:
+def _choose_contiguous_block(
+    num_sites: int,
+    subset_snps: int,
+    subset_mode: str,
+    seed: int = 0,
+) -> Tuple[int, int]:
     if subset_snps is None or subset_snps >= num_sites:
         return 0, num_sites
 
@@ -428,6 +496,7 @@ def _make_discovery_train_val_target_split(
 
     return disc_train, disc_val, target
 
+
 # =============================================================================
 # Site stats + extraction/filtering
 # =============================================================================
@@ -449,54 +518,44 @@ def compute_site_stats(ts: tskit.TreeSequence) -> dict:
     }
 
 
-def _maf_filter_mask_from_haps(
+def _global_non_monomorphic_mask_from_haps(
     G_hap_biallelic: np.ndarray,
-    maf_threshold: float,
 ) -> Tuple[np.ndarray, dict]:
+    """
+    Keep sites that are globally non-monomorphic across all haplotypes.
+    This is structural filtering only, not discovery-train feature selection.
+    """
     if G_hap_biallelic.size == 0:
         keep = np.zeros((0,), dtype=bool)
         return keep, {
             "num_sites_in": 0,
             "num_haplotypes": 0,
-            "maf_threshold": float(maf_threshold) if maf_threshold is not None else None,
-            "min_allele_count_implied": None,
-            "num_monomorphic_removed": 0,
-            "num_maf_removed": 0,
+            "num_monomorphic_removed_global": 0,
             "num_sites_out": 0,
         }
 
-    n_haps = int(G_hap_biallelic.shape[1])
     p = G_hap_biallelic.mean(axis=1)
     maf = np.minimum(p, 1.0 - p)
-
     keep = maf > 0.0
-    num_mono_removed = int((maf == 0.0).sum())
-
-    num_maf_removed = 0
-    min_ac = None
-    if maf_threshold is not None and maf_threshold > 0.0:
-        min_ac = int(math.ceil(maf_threshold * n_haps))
-        before = int(keep.sum())
-        keep &= (maf >= maf_threshold)
-        after = int(keep.sum())
-        num_maf_removed = before - after
 
     info = {
         "num_sites_in": int(G_hap_biallelic.shape[0]),
-        "num_haplotypes": n_haps,
-        "maf_threshold": float(maf_threshold) if maf_threshold is not None else None,
-        "min_allele_count_implied": min_ac,
-        "num_monomorphic_removed": num_mono_removed,
-        "num_maf_removed": int(num_maf_removed),
+        "num_haplotypes": int(G_hap_biallelic.shape[1]),
+        "num_monomorphic_removed_global": int((maf == 0.0).sum()),
         "num_sites_out": int(keep.sum()),
     }
     return keep, info
 
 
-def _extract_haps_and_diploid(
-    ts: tskit.TreeSequence,
-    maf_threshold: float,
-):
+def _extract_haps_and_diploid(ts: tskit.TreeSequence):
+    """
+    Extract haplotype and diploid genotype matrices after applying only:
+      - biallelic filtering
+      - non-missing filtering
+      - global non-monomorphic filtering
+
+    No MAF filtering is done here.
+    """
     G_hap = ts.genotype_matrix()  # (sites, samples)
     filter_report: Dict[str, object] = {}
 
@@ -515,12 +574,13 @@ def _extract_haps_and_diploid(
     site_positions_bp = site_positions_bp_all[biallelic]
     site_ids = site_ids_all[biallelic]
 
-    keep_maf, maf_info = _maf_filter_mask_from_haps(G_hap.astype(np.float32), maf_threshold=float(maf_threshold))
-    filter_report.update(maf_info)
+    # Remove globally monomorphic sites only
+    keep_global_poly, global_poly_info = _global_non_monomorphic_mask_from_haps(G_hap.astype(np.float32))
+    filter_report.update(global_poly_info)
 
-    G_hap = G_hap[keep_maf, :]
-    site_positions_bp = site_positions_bp[keep_maf]
-    site_ids = site_ids[keep_maf]
+    G_hap = G_hap[keep_global_poly, :]
+    site_positions_bp = site_positions_bp[keep_global_poly]
+    site_ids = site_ids[keep_global_poly]
 
     # If TS has no individuals, treat samples as haploid rows
     if ts.num_individuals == 0:

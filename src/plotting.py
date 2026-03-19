@@ -1,17 +1,11 @@
-import matplotlib.pyplot as plt
-import torch
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-import torch.nn.functional as F
 
-from sklearn.metrics import roc_curve, auc, balanced_accuracy_score
-from sklearn.preprocessing import label_binarize
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import confusion_matrix, recall_score
 
 
 @torch.no_grad()
@@ -19,58 +13,109 @@ def plot_reconstruction(model, dataloader, device, output_dir):
     model.eval()
     os.makedirs(output_dir, exist_ok=True)
 
-    batch = next(iter(dataloader))
+    all_y_true = []
+    all_y_pred = []
 
-    if len(batch) == 2:
-        # training-style loader: (x, label)
-        x_batch, _ = batch
-        masked_x = x_batch.to(device)
-        x_true = x_batch.to(device)
-        mask = None
-    elif len(batch) == 4:
-        # validation/test-style loader: (masked_x, x, mask, label)
-        masked_x, x_true, mask, _ = batch
-        masked_x = masked_x.to(device)
-        x_true = x_true.to(device)
-        mask = mask.to(device)
-    else:
-        raise ValueError(f"Unexpected batch structure of length {len(batch)}")
+    for batch in dataloader:
+        if len(batch) == 2:
+            # loader: (x, label)
+            x, _ = batch
 
-    logits, mu, logvar, z = model(masked_x)  # logits: (B, 3, L)
+        elif len(batch) == 4:
+            # loader: (masked_x, x_true, mask, label)
+            # since you are no longer doing masked reconstruction,
+            # evaluate on the true unmasked genotype matrix
+            _, x, _, _ = batch
 
-    # Ground truth labels: (B, L)
-    y_true = x_true.long().squeeze(1).cpu().numpy()
+        else:
+            raise ValueError(f"Unexpected batch structure of length {len(batch)}")
 
-    # Predicted probabilities: (B, 3, L) -> (B, L, 3)
-    probs = F.softmax(logits, dim=1).permute(0, 2, 1).cpu().numpy()
+        x = x.to(device)
 
-    # Hard predictions
-    y_pred = np.argmax(probs, axis=-1)
+        logits, mu, logvar, z = model(x)  # logits: (B, 3, L)
 
-    # Flatten across batch and SNP positions
-    y_true_flat = y_true.reshape(-1)
-    y_pred_flat = y_pred.reshape(-1)
-    probs_flat = probs.reshape(-1, probs.shape[-1])  # (N_total, 3)
+        # Ground truth and predictions: (B, L)
+        y_true = x.long().squeeze(1).cpu().numpy()
+        y_pred = torch.argmax(logits, dim=1).cpu().numpy()
 
-    bal_acc = balanced_accuracy_score(y_true_flat, y_pred_flat)
+        all_y_true.append(y_true)
+        all_y_pred.append(y_pred)
+
+    # Concatenate across all batches
+    y_true_all = np.concatenate(all_y_true, axis=0)   # (N, L)
+    y_pred_all = np.concatenate(all_y_pred, axis=0)   # (N, L)
+
+    # Flatten across the full genotype matrix
+    y_true_flat = y_true_all.reshape(-1)
+    y_pred_flat = y_pred_all.reshape(-1)
 
     classes = np.array([0, 1, 2])
-    y_true_bin = label_binarize(y_true_flat, classes=classes)
 
-    fpr, tpr, _ = roc_curve(y_true_bin.ravel(), probs_flat.ravel())
-    roc_auc = auc(fpr, tpr)
+    # Per-class recall and balanced accuracy
+    recalls = recall_score(
+        y_true_flat,
+        y_pred_flat,
+        labels=classes,
+        average=None,
+        zero_division=0,
+    )
+    bal_acc = recalls.mean()
 
-    plt.figure(figsize=(6, 6))
-    plt.plot(fpr, tpr, label=f"Micro-average ROC (AUC = {roc_auc:.3f})")
-    plt.plot([0, 1], [0, 1], linestyle="--")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title(f"Reconstruction ROC | AUC = {roc_auc:.3f} | Balanced Acc = {bal_acc:.3f}")
-    plt.legend(loc="lower right")
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/reconstruction_roc.png")
-    plt.close()
+    # Confusion matrix
+    cm = confusion_matrix(y_true_flat, y_pred_flat, labels=classes)
 
+    # Row-normalized confusion matrix
+    cm_row_sums = cm.sum(axis=1, keepdims=True)
+    cm_normalized = np.divide(
+        cm.astype(float),
+        cm_row_sums,
+        out=np.zeros_like(cm, dtype=float),
+        where=cm_row_sums != 0,
+    )
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm_normalized, interpolation="nearest", cmap="Blues")
+    fig.colorbar(im, ax=ax)
+
+    ax.set(
+        xticks=np.arange(len(classes)),
+        yticks=np.arange(len(classes)),
+        xticklabels=classes,
+        yticklabels=classes,
+        xlabel="Predicted genotype",
+        ylabel="True genotype",
+        title=f"Normalized Confusion Matrix\nBalanced Acc = {bal_acc:.3f}",
+    )
+
+    for i in range(cm_normalized.shape[0]):
+        for j in range(cm_normalized.shape[1]):
+            ax.text(
+                j,
+                i,
+                f"{cm_normalized[i, j]:.3f}",
+                ha="center",
+                va="center",
+                color="black",
+            )
+
+    fig.tight_layout()
+    fig.savefig(f"{output_dir}/confusion_matrix.png", dpi=300)
+    plt.close(fig)
+
+    np.save(f"{output_dir}/confusion_matrix_raw.npy", cm)
+    np.save(f"{output_dir}/confusion_matrix_normalized.npy", cm_normalized)
+
+    print(f"Global balanced accuracy: {bal_acc:.6f}")
+    for cls, rec in zip(classes, recalls):
+        print(f"Recall for class {cls}: {rec:.6f}")
+
+    return {
+        "balanced_accuracy": bal_acc,
+        "recalls": {int(cls): float(rec) for cls, rec in zip(classes, recalls)},
+        "confusion_matrix_raw": cm,
+        "confusion_matrix_normalized": cm_normalized,
+    }
 
 @torch.no_grad()
 def plot_latent_space(model, dataloader, device, output_dir, save_path="latent_space.png"):
@@ -85,7 +130,7 @@ def plot_latent_space(model, dataloader, device, output_dir, save_path="latent_s
             x_batch, y_batch = batch
         elif len(batch) == 4:
             # validation/test-style loader: (masked_x, x_true, mask, label)
-            x_batch, _, _, y_batch = batch
+            _, x_batch, _, y_batch = batch
         else:
             raise ValueError(f"Unexpected batch structure of length {len(batch)}")
 
