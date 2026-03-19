@@ -9,7 +9,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.metrics import balanced_accuracy_score, recall_score
+from sklearn.metrics import confusion_matrix, recall_score
 from torch.utils.data import DataLoader, TensorDataset
 
 # ------------------------------------------------------------------
@@ -179,7 +179,7 @@ def make_frequency_baseline_from_train(train_G: np.ndarray, eval_G: np.ndarray) 
     Predict each SNP in eval set using rounded mean genotype from train set.
     Returns shape (n_eval_individuals, n_snps)
     """
-    mean_genotype = train_G.mean(axis=0)              # in [0,2]
+    mean_genotype = train_G.mean(axis=0)
     baseline_per_snp = np.rint(mean_genotype).astype(int)
     baseline_per_snp = np.clip(baseline_per_snp, 0, 2)
 
@@ -196,8 +196,12 @@ def summarize_accuracy_by_maf_bins(
     means = []
     counts = []
 
-    for left, right in zip(bin_edges[:-1], bin_edges[1:]):
-        mask = (maf >= left) & (maf < right)
+    for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+        if i == len(bin_edges) - 2:
+            mask = (maf >= left) & (maf <= right)
+        else:
+            mask = (maf >= left) & (maf < right)
+
         vals = per_snp_acc[mask]
         vals = vals[~np.isnan(vals)]
 
@@ -215,11 +219,13 @@ def summarize_accuracy_by_maf_bins(
 
 def plot_maf_accuracy_curves(
     maf_summary_vae: dict,
+    maf_summary_shuffle: dict,
     maf_summary_baseline: dict,
     output_path: Path,
     title: str = "Per-SNP balanced accuracy vs MAF",
 ) -> None:
-    plt.figure(figsize=(7, 5))
+    plt.figure(figsize=(7.5, 5.5))
+
     plt.plot(
         maf_summary_vae["bin_centers"],
         maf_summary_vae["mean_acc"],
@@ -227,11 +233,18 @@ def plot_maf_accuracy_curves(
         label="VAE reconstruction",
     )
     plt.plot(
+        maf_summary_shuffle["bin_centers"],
+        maf_summary_shuffle["mean_acc"],
+        marker="o",
+        label="VAE shuffled input",
+    )
+    plt.plot(
         maf_summary_baseline["bin_centers"],
         maf_summary_baseline["mean_acc"],
         marker="o",
         label="Frequency baseline",
     )
+
     plt.xlabel("Minor allele frequency")
     plt.ylabel("Mean per-SNP balanced accuracy")
     plt.title(title)
@@ -244,11 +257,15 @@ def plot_maf_accuracy_curves(
 
 def save_maf_summary_table(
     maf_summary_vae: dict,
+    maf_summary_shuffle: dict,
     maf_summary_baseline: dict,
     output_path: Path,
 ) -> None:
     with open(output_path, "w") as f:
-        f.write("maf_left\tmaf_right\tbin_center\tn_snps\tvae_mean_bal_acc\tbaseline_mean_bal_acc\n")
+        f.write(
+            "maf_left\tmaf_right\tbin_center\tn_snps\t"
+            "vae_mean_bal_acc\tshuffled_mean_bal_acc\tbaseline_mean_bal_acc\n"
+        )
         edges = maf_summary_vae["bin_edges"]
         for i in range(len(edges) - 1):
             f.write(
@@ -257,6 +274,7 @@ def save_maf_summary_table(
                 f"{maf_summary_vae['bin_centers'][i]:.5f}\t"
                 f"{maf_summary_vae['counts'][i]}\t"
                 f"{maf_summary_vae['mean_acc'][i]:.6f}\t"
+                f"{maf_summary_shuffle['mean_acc'][i]:.6f}\t"
                 f"{maf_summary_baseline['mean_acc'][i]:.6f}\n"
             )
     print(f"Saved MAF summary table to: {output_path}")
@@ -286,6 +304,83 @@ def save_summary_text(
         f.write("- If VAE barely beats the frequency baseline, much of its predictive power may come from allele-frequency information.\n")
         f.write("- If VAE clearly beats the baseline, it is using additional information beyond per-SNP mean genotype.\n")
     print(f"Saved text summary to: {output_path}")
+
+
+def make_and_save_confusion_matrix(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    output_dir: Path,
+    prefix: str,
+    title_prefix: str,
+) -> dict:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    classes = np.array([0, 1, 2])
+
+    y_true_flat = y_true.reshape(-1)
+    y_pred_flat = y_pred.reshape(-1)
+
+    recalls = recall_score(
+        y_true_flat,
+        y_pred_flat,
+        labels=classes,
+        average=None,
+        zero_division=0,
+    )
+    bal_acc = float(np.mean(recalls))
+
+    cm = confusion_matrix(y_true_flat, y_pred_flat, labels=classes)
+
+    cm_row_sums = cm.sum(axis=1, keepdims=True)
+    cm_normalized = np.divide(
+        cm.astype(float),
+        cm_row_sums,
+        out=np.zeros_like(cm, dtype=float),
+        where=cm_row_sums != 0,
+    )
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm_normalized, interpolation="nearest", cmap="Blues")
+    fig.colorbar(im, ax=ax)
+
+    ax.set(
+        xticks=np.arange(len(classes)),
+        yticks=np.arange(len(classes)),
+        xticklabels=classes,
+        yticklabels=classes,
+        xlabel="Predicted genotype",
+        ylabel="True genotype",
+        title=f"{title_prefix}\nBalanced Acc = {bal_acc:.3f}",
+    )
+
+    for i in range(cm_normalized.shape[0]):
+        for j in range(cm_normalized.shape[1]):
+            ax.text(
+                j,
+                i,
+                f"{cm_normalized[i, j]:.3f}",
+                ha="center",
+                va="center",
+                color="black",
+            )
+
+    fig.tight_layout()
+    fig.savefig(output_dir / f"{prefix}_confusion_matrix.png", dpi=300)
+    plt.close(fig)
+
+    np.save(output_dir / f"{prefix}_confusion_matrix_raw.npy", cm)
+    np.save(output_dir / f"{prefix}_confusion_matrix_normalized.npy", cm_normalized)
+
+    print(f"{title_prefix} balanced accuracy: {bal_acc:.6f}")
+    for cls, rec in zip(classes, recalls):
+        print(f"{title_prefix} recall for class {cls}: {rec:.6f}")
+
+    return {
+        "balanced_accuracy": bal_acc,
+        "recalls": {int(cls): float(rec) for cls, rec in zip(classes, recalls)},
+        "confusion_matrix_raw": cm,
+        "confusion_matrix_normalized": cm_normalized,
+    }
 
 
 def main():
@@ -329,6 +424,14 @@ def main():
     np.save(args.output_dir / "reconstructed_eval_argmax.npy", G_eval_vae)
     print(f"Saved original-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax.npy'}")
 
+    make_and_save_confusion_matrix(
+        y_true=G_eval,
+        y_pred=G_eval_vae,
+        output_dir=args.output_dir,
+        prefix="vae_original",
+        title_prefix="Normalized Confusion Matrix: VAE original input",
+    )
+
     # ------------------------------------------------------------
     # 2. SNP-order shuffle test
     # ------------------------------------------------------------
@@ -343,7 +446,6 @@ def main():
         batch_size=args.batch_size,
     )
 
-    # undo the permutation on outputs so they align with original SNP columns
     inv_perm = np.argsort(perm)
     G_eval_vae_shuffled = G_eval_vae_shuffled_order[:, inv_perm]
 
@@ -354,6 +456,14 @@ def main():
     np.save(args.output_dir / "snp_permutation.npy", perm)
     print(f"Saved shuffled-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax_shuffled_input.npy'}")
     print(f"Saved SNP permutation to: {args.output_dir / 'snp_permutation.npy'}")
+
+    make_and_save_confusion_matrix(
+        y_true=G_eval,
+        y_pred=G_eval_vae_shuffled,
+        output_dir=args.output_dir,
+        prefix="vae_shuffled_input",
+        title_prefix="Normalized Confusion Matrix: VAE shuffled input",
+    )
 
     # ------------------------------------------------------------
     # 3. Frequency baseline
@@ -366,6 +476,14 @@ def main():
     np.save(args.output_dir / "reconstructed_eval_frequency_baseline.npy", G_eval_baseline)
     print(f"Saved frequency baseline predictions to: {args.output_dir / 'reconstructed_eval_frequency_baseline.npy'}")
 
+    make_and_save_confusion_matrix(
+        y_true=G_eval,
+        y_pred=G_eval_baseline,
+        output_dir=args.output_dir,
+        prefix="frequency_baseline",
+        title_prefix="Normalized Confusion Matrix: frequency baseline",
+    )
+
     # ------------------------------------------------------------
     # 4. Per-SNP balanced accuracy vs MAF
     # ------------------------------------------------------------
@@ -373,10 +491,12 @@ def main():
     maf_eval = compute_maf(G_eval)
 
     per_snp_acc_vae = compute_per_snp_balanced_accuracy(G_eval, G_eval_vae)
+    per_snp_acc_shuffle = compute_per_snp_balanced_accuracy(G_eval, G_eval_vae_shuffled)
     per_snp_acc_baseline = compute_per_snp_balanced_accuracy(G_eval, G_eval_baseline)
 
     np.save(args.output_dir / "maf_eval.npy", maf_eval)
     np.save(args.output_dir / "per_snp_bal_acc_vae.npy", per_snp_acc_vae)
+    np.save(args.output_dir / "per_snp_bal_acc_shuffle.npy", per_snp_acc_shuffle)
     np.save(args.output_dir / "per_snp_bal_acc_baseline.npy", per_snp_acc_baseline)
     print(f"Saved per-SNP arrays to: {args.output_dir}")
 
@@ -391,6 +511,11 @@ def main():
         per_snp_acc=per_snp_acc_vae,
         bin_edges=maf_bin_edges,
     )
+    maf_summary_shuffle = summarize_accuracy_by_maf_bins(
+        maf=maf_eval,
+        per_snp_acc=per_snp_acc_shuffle,
+        bin_edges=maf_bin_edges,
+    )
     maf_summary_baseline = summarize_accuracy_by_maf_bins(
         maf=maf_eval,
         per_snp_acc=per_snp_acc_baseline,
@@ -399,6 +524,7 @@ def main():
 
     plot_maf_accuracy_curves(
         maf_summary_vae=maf_summary_vae,
+        maf_summary_shuffle=maf_summary_shuffle,
         maf_summary_baseline=maf_summary_baseline,
         output_path=args.output_dir / "balanced_accuracy_vs_maf.png",
         title="Per-SNP balanced accuracy vs MAF",
@@ -406,6 +532,7 @@ def main():
 
     save_maf_summary_table(
         maf_summary_vae=maf_summary_vae,
+        maf_summary_shuffle=maf_summary_shuffle,
         maf_summary_baseline=maf_summary_baseline,
         output_path=args.output_dir / "maf_accuracy_summary.tsv",
     )
@@ -423,7 +550,6 @@ def main():
         acc_baseline=acc_baseline,
     )
 
-    # Also save a compact numeric summary
     np.savez(
         args.output_dir / "diagnostic_summary.npz",
         global_bal_acc_vae=acc_vae,
