@@ -9,7 +9,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, recall_score
 from torch.utils.data import DataLoader, TensorDataset
 
 # ------------------------------------------------------------------
@@ -134,14 +134,17 @@ def reconstruct_argmax_genotypes(
 
 
 def compute_global_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    return balanced_accuracy_score(y_true.ravel(), y_pred.ravel())
+    recalls = recall_score(
+        y_true.ravel(),
+        y_pred.ravel(),
+        labels=[0, 1, 2],
+        average=None,
+        zero_division=0,
+    )
+    return float(np.mean(recalls))
 
 
 def compute_per_snp_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-    """
-    Compute balanced accuracy per SNP column.
-    Returns shape (n_snps,)
-    """
     n_snps = y_true.shape[1]
     out = np.full(n_snps, np.nan, dtype=float)
 
@@ -149,12 +152,14 @@ def compute_per_snp_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) ->
         yt = y_true[:, j]
         yp = y_pred[:, j]
 
-        # balanced_accuracy_score is valid even if not all classes are present,
-        # as long as y_true is not constant in a degenerate way. Keep try/except for safety.
-        try:
-            out[j] = balanced_accuracy_score(yt, yp)
-        except Exception:
-            out[j] = np.nan
+        recalls = recall_score(
+            yt,
+            yp,
+            labels=[0, 1, 2],
+            average=None,
+            zero_division=0,
+        )
+        out[j] = float(np.mean(recalls))
 
     return out
 

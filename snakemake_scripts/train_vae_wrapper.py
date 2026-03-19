@@ -47,11 +47,9 @@ def extract_mu(model, dataloader, device):
     with torch.no_grad():
         for batch in dataloader:
             if len(batch) == 2:
-                # training-style loader: (x, label)
                 x, y = batch
             elif len(batch) == 4:
-                # val/test-style loader: (masked_x, x_true, mask, label)
-                x, _, _, y = batch
+                _, x, _, y = batch
             else:
                 raise ValueError(f"Unexpected batch structure of length {len(batch)}")
 
@@ -368,7 +366,9 @@ def main(
     # ------------------------------------------------------------------
     # plots: validation
     # ------------------------------------------------------------------
-    plot_reconstruction(model, val_loader, device, output_dir=out)
+
+    val_metrics = plot_reconstruction(model, val_loader, device, output_dir=out)
+    print(f"Validation global balanced accuracy: {val_metrics['balanced_accuracy']:.6f}")
     plot_latent_space(model, val_loader, device, output_dir=out)
     plot_loss_curves(
         train_losses=train_loss_list,
@@ -402,7 +402,8 @@ def main(
     target_out_path = out / "target"
     target_out_path.mkdir(exist_ok=True)
 
-    plot_reconstruction(model, target_loader, device, output_dir=target_out_path)
+    target_metrics = plot_reconstruction(model, target_loader, device, output_dir=target_out_path)
+    print(f"Target global balanced accuracy: {target_metrics['balanced_accuracy']:.6f}")
     plot_latent_space(model, target_loader, device, output_dir=target_out_path)
 
     # ------------------------------------------------------------------

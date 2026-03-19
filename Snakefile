@@ -393,6 +393,7 @@ rule compare_ld_decay_discovery:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=DISCOVERY_VAL,
+        variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
         reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/reconstructed_genotypes_argmax.npy",
@@ -402,17 +403,22 @@ rule compare_ld_decay_discovery:
     params:
         output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_discovery_val",
         batch_size=128,
-        max_distance=100,
+        distance_mode="bp",
+        max_bp_distance=50000,
+        bp_bin_size=1000,
         label="discovery_val",
-        title=lambda wc: f"LD decay: Discovery Val truth vs reconstructed ({wc.exp_id})",
+        title=lambda wc: f"LD decay: Discovery Val ({wc.exp_id})",
     shell:
         r"""
         python {input.script} \
             --checkpoint {input.checkpoint} \
             --genotype-npy {input.genotype_npy} \
+            --variant-positions-npy {input.variant_positions} \
             --output-dir {params.output_dir} \
             --batch-size {params.batch_size} \
-            --max-distance {params.max_distance} \
+            --distance-mode {params.distance_mode} \
+            --max-bp-distance {params.max_bp_distance} \
+            --bp-bin-size {params.bp_bin_size} \
             --label {params.label} \
             --title "{params.title}" \
             --include-metrics-in-title
@@ -423,6 +429,7 @@ rule compare_ld_decay_target:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=TARGET,
+        variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
         reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/reconstructed_genotypes_argmax.npy",
@@ -432,17 +439,22 @@ rule compare_ld_decay_target:
     params:
         output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target",
         batch_size=128,
-        max_distance=100,
+        distance_mode="bp",
+        max_bp_distance=50000,
+        bp_bin_size=1000,
         label="target_yri",
-        title=lambda wc: f"LD decay: Target/YRI truth vs reconstructed ({wc.exp_id})",
+        title=lambda wc: f"LD decay: Target/YRI ({wc.exp_id})",
     shell:
         r"""
         python {input.script} \
             --checkpoint {input.checkpoint} \
             --genotype-npy {input.genotype_npy} \
+            --variant-positions-npy {input.variant_positions} \
             --output-dir {params.output_dir} \
             --batch-size {params.batch_size} \
-            --max-distance {params.max_distance} \
+            --distance-mode {params.distance_mode} \
+            --max-bp-distance {params.max_bp_distance} \
+            --bp-bin-size {params.bp_bin_size} \
             --label {params.label} \
             --title "{params.title}" \
             --include-metrics-in-title
