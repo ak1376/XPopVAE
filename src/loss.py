@@ -37,7 +37,10 @@ def recon_all_loss(logits, targets):
 def kl_loss(mu, logvar):
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
+def phenotype_loss(pheno_pred, pheno_true):
+    return F.mse_loss(pheno_pred, pheno_true, reduction="mean")
 
-def vae_loss(recon_unmasked, recon_masked, kl, alpha=1.0, beta=1.0):
-    loss = alpha * recon_masked + (1 - alpha) * recon_unmasked + beta * kl
-    return loss, recon_unmasked, recon_masked, kl
+
+def vae_loss(recon_unmasked, recon_masked, kl, pheno_loss, alpha=1.0, beta=1.0, gamma=1.0):
+    loss = alpha * recon_masked + (1 - alpha) * recon_unmasked + beta * kl + gamma * pheno_loss
+    return loss, recon_unmasked, recon_masked, kl, pheno_loss

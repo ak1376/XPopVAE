@@ -158,6 +158,11 @@ DISCOVERY_TRAIN = PROC_BASEDIR / "0/rep0/discovery_train.npy"
 DISCOVERY_VAL = PROC_BASEDIR / "0/rep0/discovery_val.npy"
 TARGET = PROC_BASEDIR / "0/rep0/target.npy"
 
+# Define the phenotype paths as well
+DISCOVERY_TRAIN_PHENO = PROC_BASEDIR / "0/rep0/discovery_train_pheno.npy"
+DISCOVERY_VAL_PHENO = PROC_BASEDIR / "0/rep0/discovery_val_pheno.npy"
+TARGET_PHENO = PROC_BASEDIR / "0/rep0/target_pheno.npy"
+
 # -----------------------------------------------------------------------------
 # Helper functions
 # -----------------------------------------------------------------------------
@@ -259,6 +264,14 @@ rule all:
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
         expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/target.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
+
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/target_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+
         expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
         expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
@@ -326,6 +339,11 @@ rule build_genotypes:
         discovery_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train.npy",
         discovery_val=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val.npy",
         target=PROC_BASEDIR / "{sim_number}/rep{replicate}/target.npy",
+
+        discovery_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_pheno.npy",
+        discovery_val_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_pheno.npy",
+        target_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_pheno.npy",
+
         meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
         hap_meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
         all_individuals=PROC_BASEDIR / "{sim_number}/rep{replicate}/all_individuals.npy",
@@ -371,6 +389,9 @@ rule train_vae:
         vae_yaml=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
         training_data=DISCOVERY_TRAIN,
         validation_data=DISCOVERY_VAL,
+        training_pheno=DISCOVERY_TRAIN_PHENO,
+        validation_pheno=DISCOVERY_VAL_PHENO,
+        target_pheno=TARGET_PHENO,
         target_data=TARGET,
         script=TRAIN_VAE_SCRIPT,
     output:
@@ -386,6 +407,9 @@ rule train_vae:
             --training-data {input.training_data} \
             --validation-data {input.validation_data} \
             --target-data {input.target_data} \
+            --training-pheno {input.training_pheno} \
+            --validation-pheno {input.validation_pheno} \
+            --target-pheno {input.target_pheno} \
             --outputs {params.outdir}
         """
 

@@ -15,6 +15,8 @@ class ConvVAE(nn.Module):
         num_classes=3,
         use_batchnorm=False,
         activation="elu",
+        pheno_dim=1,
+        pheno_hidden_dim=None,
     ):
         super().__init__()
 
@@ -68,6 +70,16 @@ class ConvVAE(nn.Module):
         self.fc_mu = nn.Linear(self.flat_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
+
+        # phenotype head
+        if pheno_hidden_dim is None:
+            self.pheno_head = nn.Linear(latent_dim, pheno_dim)
+        else:
+            self.pheno_head = nn.Sequential(
+                nn.Linear(latent_dim, pheno_hidden_dim),
+                self._get_activation(),
+                nn.Linear(pheno_hidden_dim, pheno_dim),
+            )
 
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
@@ -149,10 +161,12 @@ class ConvVAE(nn.Module):
 
         mu = self.fc_mu(h_flat)
         logvar = self.fc_logvar(h_flat)
-
         logvar = torch.clamp(logvar, min=-6.0, max=6.0)
 
         z = self.reparameterize(mu, logvar)
+
+        # phenotype prediction from latent
+        pheno_pred = self.pheno_head(mu)   # or self.pheno_head(z)
 
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
@@ -169,4 +183,4 @@ class ConvVAE(nn.Module):
                 f"Decoder output shape {out.shape} does not match expected logits shape {expected_shape}"
             )
 
-        return out, mu, logvar, z
+        return out, mu, logvar, z, pheno_pred

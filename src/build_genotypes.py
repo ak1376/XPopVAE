@@ -254,9 +254,19 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
     G_disc_val = G_subset[disc_val_idx]
     G_target = G_subset[target_idx]
 
+    # Matching phenotypes from aligned meta
+    y_all = meta["phenotype"].to_numpy()
+    y_disc_train = y_all[disc_train_idx]
+    y_disc_val = y_all[disc_val_idx]
+    y_target = y_all[target_idx]
+
     np.save(outdir / "discovery_train.npy", G_disc_train.astype(np.float32))
     np.save(outdir / "discovery_val.npy", G_disc_val.astype(np.float32))
     np.save(outdir / "target.npy", G_target.astype(np.float32))
+
+    np.save(outdir / "discovery_train_pheno.npy", y_disc_train)
+    np.save(outdir / "discovery_val_pheno.npy", y_disc_val)
+    np.save(outdir / "target_pheno.npy", y_target)
 
     summary = {
         "outdir": str(outdir),
@@ -274,9 +284,11 @@ def build_genotypes_for_vae(a: BuildGenotypesArgs) -> Dict[str, Any]:
         "pop_counts": meta["population"].astype(str).value_counts().to_dict(),
         "normalize": False,
         "norm_mode": "af_residual",
-        # Keep legacy keys for compatibility
         "num_snps_before_train_mono_filter": num_snps_before,
         "num_snps_after_train_mono_filter": num_snps_after,
+        "discovery_train_pheno_shape": int(len(y_disc_train)),
+        "discovery_val_pheno_shape": int(len(y_disc_val)),
+        "target_pheno_shape": int(len(y_target)),
     }
     return summary
 

@@ -36,6 +36,10 @@ masking:
   gaussian_std: 0.0
   constant_value: -1.0
 
+phenotype:
+  pheno_hidden_dim: 64
+  gamma: 5.0
+
 seed: 0
 
 grid:

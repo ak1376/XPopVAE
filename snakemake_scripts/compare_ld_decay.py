@@ -106,6 +106,8 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> C
     vae_config = checkpoint["vae_config"]
     input_length = int(checkpoint["input_length"])
 
+    pheno_hidden_dim = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
+
     model = ConvVAE(
         input_length=input_length,
         in_channels=1,
@@ -114,8 +116,10 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> C
         stride=int(vae_config["model"]["stride"]),
         padding=int(vae_config["model"]["padding"]),
         latent_dim=int(vae_config["model"]["latent_dim"]),
-        use_batchnorm=False,
-        activation="elu",
+        use_batchnorm=bool(vae_config["model"].get("use_batchnorm", False)),
+        activation=vae_config["model"].get("activation", "elu"),
+        pheno_dim=1,
+        pheno_hidden_dim=pheno_hidden_dim,
     ).to(device)
 
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -138,8 +142,8 @@ def reconstruct_argmax_genotypes(
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, mu, logvar, z = model(x)   # (B,3,L)
-            pred = torch.argmax(logits, dim=1) # (B,L)
+            logits, _, _, _, _ = model(x)   # (B,3,L)
+            pred = torch.argmax(logits, dim=1)  # (B,L)
             recon_batches.append(pred.cpu().numpy())
 
     return np.concatenate(recon_batches, axis=0)
