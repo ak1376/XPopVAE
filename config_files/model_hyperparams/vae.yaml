@@ -37,8 +37,8 @@ masking:
   constant_value: -1.0
 
 phenotype:
-  pheno_hidden_dim: 64
-  gamma: 5.0
+  pheno_hidden_dim: 1
+  gamma: 1.0
 
 seed: 0
 

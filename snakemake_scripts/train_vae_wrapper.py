@@ -160,6 +160,13 @@ def main(
     validation_pheno = np.load(validation_pheno_path)
     target_pheno = np.load(target_pheno_path)
 
+    train_mean = training_pheno.mean()
+    train_std = training_pheno.std()
+
+    training_pheno = (training_pheno - train_mean) / train_std
+    validation_pheno = (validation_pheno - train_mean) / train_std
+    target_pheno = (target_pheno - train_mean) / train_std
+
     input_length = training_dataset.shape[-1]
 
     training_dataset_torch = torch.tensor(training_dataset, dtype=torch.float32).unsqueeze(1)
@@ -338,15 +345,15 @@ def main(
             f"Epoch {epoch + 1:03d}/{num_epochs} | "
             f"train_loss={train_loss:.6f} | "
             f"val_loss={val_loss:.6f} | "
-            f"train_stop_metric={train_stop_metric:.6f} | "
-            f"val_stop_metric={val_stop_metric:.6f} | "
+            # f"train_stop_metric={train_stop_metric:.6f} | "
+            # f"val_stop_metric={val_stop_metric:.6f} | "
             f"train_recon_unmasked={train_recon_unmasked:.6f} | "
-            f"train_recon_masked={train_recon_masked:.6f} | "
-            f"train_kl={train_kl:.6f} | "
+            # f"train_recon_masked={train_recon_masked:.6f} | "
+            # f"train_kl={train_kl:.6f} | "
             f"train_pheno_loss={train_phenotype_loss:.6f} | "
             f"val_recon_unmasked={val_recon_unmasked:.6f} | "
-            f"val_recon_masked={val_recon_masked:.6f} | "
-            f"val_kl={val_kl:.6f} | "
+            # f"val_recon_masked={val_recon_masked:.6f} | "
+            # f"val_kl={val_kl:.6f} | "
             f"val_pheno_loss={val_phenotype_loss:.6f}"
         )
 
@@ -406,7 +413,7 @@ def main(
     print(f"Saved training history to: {history_path}")
 
     # Reload best model before downstream plots/evaluation
-    best_checkpoint = torch.load(final_model_path, map_location=device)
+    best_checkpoint = torch.load(best_model_path, map_location=device)
     model.load_state_dict(best_checkpoint["model_state_dict"])
     print(
         f"Reloaded best model from epoch {best_checkpoint['epoch']} "
