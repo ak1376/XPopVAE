@@ -326,8 +326,8 @@ def main(
 
         # Early-stopping / model-selection metric:
         # reconstruction + KL only (ignore phenotype loss for now)
-        train_stop_metric = train_recon_unmasked + alpha * train_recon_masked + beta * train_kl
-        val_stop_metric = val_recon_unmasked + alpha * val_recon_masked + beta * val_kl
+        train_stop_metric = train_recon_unmasked + alpha * train_recon_masked + beta * train_kl + gamma * train_phenotype_loss
+        val_stop_metric = val_recon_unmasked + alpha * val_recon_masked + beta * val_kl + gamma * val_phenotype_loss
 
         train_loss_list.append(train_loss)
         train_recon_unmasked_list.append(train_recon_unmasked)
