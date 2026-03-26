@@ -194,9 +194,9 @@ def main(
         np.save(out / "target_masks.npy",              target_mask.numpy())
     else:
         val_input_x    = validation_dataset_torch
-        val_mask       = torch.zeros_like(validation_dataset_torch)
+        val_mask    = torch.zeros(validation_dataset_torch.shape[0], validation_dataset_torch.shape[2], dtype=torch.bool)
         target_input_x = target_dataset_torch
-        target_mask    = torch.zeros_like(target_dataset_torch)
+        target_mask    = torch.zeros(target_dataset_torch.shape[0], target_dataset_torch.shape[2], dtype=torch.bool)
 
         np.save(out / "validation_dataset.npy", val_input_x.numpy())
         np.save(out / "target_dataset.npy",     target_input_x.numpy())
@@ -206,13 +206,12 @@ def main(
     # ------------------------------------------------------------------
     plot_example_input_heatmap(
         original_x=validation_dataset_torch,
-        input_x=val_input_x,
+        masked_x=val_input_x,
         mask=val_mask,
         output_path=out / "example_input_heatmap_val.png",
         sample_indices=(0, 1, 2, 3, 4),
         snp_start=0,
         snp_count=1000,
-        masking_enabled=masking,
     )
 
     # ------------------------------------------------------------------

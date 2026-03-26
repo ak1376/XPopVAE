@@ -3,26 +3,19 @@ import torch.nn.functional as F
 
 
 def recon_unmasked_loss(logits, targets, mask):
-    """
-    logits:  [B, C, X]
-    targets: [B, X]
-    mask:    [B, X]   True = masked position
-    """
-    logits = logits.permute(0, 2, 1)          # [B, X, C]
-    unmasked_logits = logits[~mask]           # [N_unmasked, C]
-    unmasked_targets = targets[~mask]         # [N_unmasked]
+    if mask.all():
+        return torch.tensor(0.0, device=logits.device, requires_grad=True)
+    logits = logits.permute(0, 2, 1)
+    unmasked_logits  = logits[~mask]
+    unmasked_targets = targets[~mask]
     return F.cross_entropy(unmasked_logits, unmasked_targets, reduction="mean")
 
-
 def recon_masked_loss(logits, targets, mask):
-    """
-    logits:  [B, C, X]
-    targets: [B, X]
-    mask:    [B, X]   True = masked position
-    """
-    logits = logits.permute(0, 2, 1)          # [B, X, C]
-    masked_logits = logits[mask]              # [N_masked, C]
-    masked_targets = targets[mask]            # [N_masked]
+    if not mask.any():
+        return torch.tensor(0.0, device=logits.device, requires_grad=True)
+    logits = logits.permute(0, 2, 1)
+    masked_logits  = logits[mask]
+    masked_targets = targets[mask]
     return F.cross_entropy(masked_logits, masked_targets, reduction="mean")
 
 

@@ -20,7 +20,8 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         if masker is not None:
             input_x, mask = masker.mask(x)
         else:
-            input_x, mask = x, torch.zeros_like(x)
+            input_x = x
+            mask = torch.zeros(x.shape[0], x.shape[2], dtype=torch.bool, device=x.device)  # [B, X] not [B, 1, X]
         input_x = input_x.to(device)
         mask = mask.to(device)
 

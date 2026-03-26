@@ -447,14 +447,14 @@ def plot_loss_curves(
     train_losses,
     val_losses,
     train_recon_unmasked_losses,
-    train_recon_masked_losses,
     val_recon_unmasked_losses,
-    val_recon_masked_losses,
     train_kl_losses,
     val_kl_losses,
     train_pheno_losses,
     val_pheno_losses,
     output_dir,
+    train_recon_masked_losses=None,
+    val_recon_masked_losses=None,
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
@@ -481,16 +481,18 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_recon_unmasked.png", dpi=300)
     plt.close()
 
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, train_recon_masked_losses, label="train recon masked")
-    plt.plot(epochs, val_recon_masked_losses, label="val recon masked")
-    plt.xlabel("epoch")
-    plt.ylabel("recon masked loss")
-    plt.title("Reconstruction loss (masked positions)")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/loss_recon_masked.png", dpi=300)
-    plt.close()
+    # only plot masked recon curves when masking was enabled
+    if train_recon_masked_losses is not None and val_recon_masked_losses is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_recon_masked_losses, label="train recon masked")
+        plt.plot(epochs, val_recon_masked_losses, label="val recon masked")
+        plt.xlabel("epoch")
+        plt.ylabel("recon masked loss")
+        plt.title("Reconstruction loss (masked positions)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/loss_recon_masked.png", dpi=300)
+        plt.close()
 
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, train_kl_losses, label="train kl")
@@ -513,7 +515,6 @@ def plot_loss_curves(
     plt.tight_layout()
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
-
 
 # ------------------------------------------------------------------
 # masking diagnostic
