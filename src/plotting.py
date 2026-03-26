@@ -453,8 +453,11 @@ def plot_loss_curves(
     train_pheno_losses,
     val_pheno_losses,
     output_dir,
+    train_ortho_losses=None,
+    val_ortho_losses=None,
     train_recon_masked_losses=None,
     val_recon_masked_losses=None,
+    
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
@@ -515,6 +518,19 @@ def plot_loss_curves(
     plt.tight_layout()
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
+
+    # Ortho loss — only plot if provided and nonzero
+    if train_ortho_losses is not None and val_ortho_losses is not None:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(train_ortho_losses, label="train ortho")
+        ax.plot(val_ortho_losses,   label="val ortho")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("orthogonality loss")
+        ax.set_title("Orthogonality loss (z_recon ⊥ z_pheno)")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(output_dir / "loss_ortho.png", dpi=150)
+        plt.close(fig)
 
 # ------------------------------------------------------------------
 # masking diagnostic

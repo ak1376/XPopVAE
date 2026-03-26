@@ -82,6 +82,7 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> C
     input_length = int(checkpoint["input_length"])
 
     pheno_hidden_dim = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
+    pheno_latent_dim=vae_config["phenotype"].get("pheno_latent_dim", None)
 
     model = ConvVAE(
         input_length=input_length,
@@ -95,6 +96,7 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> C
         activation=vae_config["model"].get("activation", "elu"),
         pheno_dim=1,
         pheno_hidden_dim=pheno_hidden_dim,
+        pheno_latent_dim=pheno_latent_dim
     ).to(device)
 
     model.load_state_dict(checkpoint["model_state_dict"])

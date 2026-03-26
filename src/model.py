@@ -17,8 +17,14 @@ class ConvVAE(nn.Module):
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=None,
+        pheno_latent_dim=8,        # NEW: how many latent dims go to pheno head
+                                   # remaining (latent_dim - pheno_latent_dim) go to decoder
     ):
         super().__init__()
+
+        assert pheno_latent_dim < latent_dim, (
+            f"pheno_latent_dim ({pheno_latent_dim}) must be < latent_dim ({latent_dim})"
+        )
 
         self.input_length = input_length
         self.in_channels = in_channels
@@ -31,6 +37,10 @@ class ConvVAE(nn.Module):
         self.use_batchnorm = use_batchnorm
         self.activation = activation
         self.encoder_lengths = [input_length]
+
+        # NEW: carve latent_dim into two non-overlapping slices
+        self.pheno_latent_dim = pheno_latent_dim
+        self.recon_latent_dim = latent_dim - pheno_latent_dim
 
         enc_layers = []
         current_in = in_channels
@@ -67,16 +77,19 @@ class ConvVAE(nn.Module):
         self.final_length = current_length
         self.flat_dim = self.final_channels * self.final_length
 
+        # Unchanged — encoder still produces full latent_dim
         self.fc_mu = nn.Linear(self.flat_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
-        self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
-        # phenotype head
+        # CHANGED: decoder only receives recon slice, so input is smaller
+        self.fc_decode = nn.Linear(self.recon_latent_dim, self.flat_dim)
+
+        # CHANGED: pheno head only receives pheno slice, so input is smaller
         if pheno_hidden_dim is None:
-            self.pheno_head = nn.Linear(latent_dim, pheno_dim)
+            self.pheno_head = nn.Linear(self.pheno_latent_dim, pheno_dim)
         else:
             self.pheno_head = nn.Sequential(
-                nn.Linear(latent_dim, pheno_hidden_dim),
+                nn.Linear(self.pheno_latent_dim, pheno_hidden_dim),
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
@@ -165,10 +178,15 @@ class ConvVAE(nn.Module):
 
         z = self.reparameterize(mu, logvar)
 
-        # phenotype prediction from latent
-        pheno_pred = self.pheno_head(mu)   # or self.pheno_head(z)
+        # NEW: slice z and mu into their dedicated subspaces
+        z_recon  = z[:, :self.recon_latent_dim]   # → decoder only
+        mu_pheno = mu[:, self.recon_latent_dim:]   # → pheno head only
 
-        h_dec = self.fc_decode(z)
+        # Phenotype predicted from the pheno slice of mu (no sampling noise)
+        pheno_pred = self.pheno_head(mu_pheno)
+
+        # Decoder sees only the recon slice of z
+        h_dec = self.fc_decode(z_recon)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
 
         out = h_dec

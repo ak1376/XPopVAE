@@ -9,7 +9,7 @@ model:
 
 training:
   batch_size: 64
-  max_epochs: 10
+  max_epochs: 300
   lr: 1e-4
   beta: 0.07
   weight_decay: 0.0
@@ -38,8 +38,10 @@ masking:
   constant_value: -1.0
 
 phenotype:
-  pheno_hidden_dim: 1
+  pheno_hidden_dim: 64
   gamma: 1.0
+  pheno_latent_dim: 16
+  lambda_ortho: 1e-5
 
 seed: 0
 

@@ -33,7 +33,16 @@ def kl_loss(mu, logvar):
 def phenotype_loss(pheno_pred, pheno_true):
     return F.mse_loss(pheno_pred, pheno_true, reduction="mean")
 
+def orthogonality_loss(z_recon, z_pheno):
+    # Centre each subspace across the batch
+    z_r = z_recon - z_recon.mean(dim=0)
+    z_p = z_pheno - z_pheno.mean(dim=0)
+    # Cross-covariance matrix: (recon_dim, pheno_dim)
+    cross_cov = z_r.T @ z_p
+    return (cross_cov ** 2).sum()
 
-def vae_loss(recon_unmasked, recon_masked, kl, pheno_loss, alpha=1.0, beta=1.0, gamma=1.0):
-    loss = alpha * recon_masked + (1 - alpha) * recon_unmasked + beta * kl + gamma * pheno_loss
-    return loss, recon_unmasked, recon_masked, kl, pheno_loss
+
+def vae_loss(recon_unmasked, recon_masked, kl, pheno_loss, z_recon, z_pheno, alpha=1.0, beta=1.0, gamma=1.0, lambda_ortho=1e-3):
+    ortho_loss = orthogonality_loss(z_recon, z_pheno)
+    loss = recon_unmasked + alpha * recon_masked + beta * kl + gamma * pheno_loss + lambda_ortho * ortho_loss
+    return loss, recon_unmasked, recon_masked, kl, pheno_loss, ortho_loss
