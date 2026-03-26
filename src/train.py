@@ -17,15 +17,19 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         pop_label = pop_label.to(device)
 
         # dynamic masking: fresh every batch, every epoch
-        masked_x, mask = masker.mask(x)
-        masked_x = masked_x.to(device)
+        if masker is not None:
+            input_x, mask = masker.mask(x)
+        else:
+            input_x, mask = x, torch.zeros_like(x)
+        input_x = input_x.to(device)
         mask = mask.to(device)
 
         optimizer.zero_grad()
 
-        logits, mu, logvar, z, pheno_pred = model(masked_x)
+        logits, mu, logvar, z, pheno_pred = model(input_x)
         targets = x.squeeze(1).long()
 
+        # If masking is disabled then recon_masked_loss = recon_unmasked_loss. 
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked = recon_masked_loss(logits, targets, mask)
         kl = kl_loss(mu, logvar)
@@ -71,14 +75,14 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
     total_kl_loss = 0.0
     total_phenotype_loss = 0.0
 
-    for masked_x, x, pheno, mask, pop_label in dataloader:
-        masked_x = masked_x.to(device)
+    for input_x, x, pheno, mask, pop_label in dataloader:
+        input_x = input_x.to(device)
         x = x.to(device)
         pheno = pheno.to(device)
         mask = mask.to(device)
         pop_label = pop_label.to(device)
 
-        logits, mu, logvar, z, pheno_pred = model(masked_x)
+        logits, mu, logvar, z, pheno_pred = model(input_x)
         targets = x.squeeze(1).long()
 
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)

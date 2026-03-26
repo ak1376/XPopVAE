@@ -518,7 +518,7 @@ def plot_loss_curves(
 # ------------------------------------------------------------------
 # masking diagnostic
 # ------------------------------------------------------------------
-def plot_example_masked_input_heatmap(
+def plot_example_input_heatmap(
     original_x,
     masked_x,
     mask,

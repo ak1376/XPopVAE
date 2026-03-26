@@ -133,6 +133,7 @@ BUILD_GT_SCRIPT = "snakemake_scripts/run_build_genotypes.py"
 TRAIN_VAE_SCRIPT = "snakemake_scripts/train_vae_wrapper.py"
 COMPARE_LD_SCRIPT = "snakemake_scripts/compare_ld_decay.py"
 DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
+BASELINE_SCRIPT = "snakemake_scripts/baseline_predictors.py"
 
 # -----------------------------------------------------------------------------
 # Directories
@@ -296,6 +297,7 @@ rule all:
                exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
                exp_id=EXP_IDS),
+        PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
 
 # -----------------------------------------------------------------------------
 # 1. Run one simulation
@@ -389,12 +391,11 @@ rule train_vae:
         vae_yaml=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
         training_data=DISCOVERY_TRAIN,
         validation_data=DISCOVERY_VAL,
+
+        # THE BELOW PHENOTYPES ARE HARDCODED TO USE THE SANITY CHECK ONES. 
         training_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
         validation_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
         target_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
-        # training_pheno=DISCOVERY_TRAIN_PHENO,
-        # validation_pheno=DISCOVERY_VAL_PHENO,
-        # target_pheno=TARGET_PHENO,
         target_data=TARGET,
         script=TRAIN_VAE_SCRIPT,
     output:
@@ -534,3 +535,33 @@ rule write_vae_config:
 
         with open(output.config, "w") as f:
             yaml.safe_dump(cfg, f, sort_keys=False)
+
+rule run_baselines:
+    input:
+        script      = BASELINE_SCRIPT,
+        x_train     = DISCOVERY_TRAIN,
+        # TODO: The current phenotype files are using the sanity check ones. 
+        y_train     = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
+        x_val       = DISCOVERY_VAL,
+        y_val       = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
+        x_test      = TARGET,
+        y_test      = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
+    output:
+        results = PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+    params:
+        out_dir = PROC_BASEDIR / "0/rep0/baselines",
+        h2      = float(EXP_CFG.get("h2", 0.7)),
+        seed    = 42,
+    shell:
+        r"""
+        python {input.script} \
+            --x_train {input.x_train} \
+            --y_train {input.y_train} \
+            --x_val   {input.x_val}   \
+            --y_val   {input.y_val}   \
+            --x_test  {input.x_test}  \
+            --y_test  {input.y_test}  \
+            --out_dir {params.out_dir} \
+            --h2      {params.h2}      \
+            --seed    {params.seed}
+        """

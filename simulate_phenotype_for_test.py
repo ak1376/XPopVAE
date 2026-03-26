@@ -168,7 +168,7 @@ def main():
     X_val = np.load(val_path)
     X_target = np.load(target_path)
 
-    num_causal = 100
+    num_causal = 9000
     heritability = 0.7
     seed = 295
     standardize = True

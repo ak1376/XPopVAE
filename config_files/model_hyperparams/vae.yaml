@@ -9,7 +9,7 @@ model:
 
 training:
   batch_size: 64
-  max_epochs: 300
+  max_epochs: 10
   lr: 1e-4
   beta: 0.07
   weight_decay: 0.0
@@ -24,7 +24,7 @@ training:
   patience: 40
 
 masking:
-  enabled: true
+  enabled: false
   use_mask_channel: true
   alpha_masked: 0.0
   mode: "contiguous"
@@ -44,7 +44,7 @@ phenotype:
 seed: 0
 
 grid:
-  enabled: true
+  enabled: false
   name:
     prefix: "vae_gamma_pheno"
     sep: "__"
