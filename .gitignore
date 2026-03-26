@@ -3,3 +3,4 @@ experiments/
 model_outputs/
 src/__pycache__/
 .snakemake/
+phenotype_creation/
