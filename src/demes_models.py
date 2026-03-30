@@ -2,7 +2,9 @@ from typing import Dict, Optional
 import demes
 
 
-def IM_symmetric_model(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
+def IM_symmetric_model(
+    sampled: Dict[str, float], cfg: Optional[Dict] = None
+) -> demes.Graph:
     """
     Split + symmetric migration (YRI/CEU), but *no separate ancestral-only deme*.
     YRI carries the ancestral epoch pre-split; CEU branches off at T_split.
@@ -17,8 +19,8 @@ def IM_symmetric_model(sampled: Dict[str, float], cfg: Optional[Dict] = None) ->
     N0 = float(sampled["N_anc"])
     N1 = float(sampled["N_YRI"])
     N2 = float(sampled["N_CEU"])
-    T  = float(sampled["T_split"])
-    m  = float(sampled["m"])
+    T = float(sampled["T_split"])
+    m = float(sampled["m"])
 
     assert T > 0, "T_split must be > 0"
 

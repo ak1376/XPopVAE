@@ -22,6 +22,7 @@ from src.demes_models import IM_symmetric_model
 # Minimal helpers
 # ──────────────────────────────────
 
+
 def sample_params(
     priors: Dict[str, List[float]], *, rng: Optional[np.random.Generator] = None
 ) -> Dict[str, float]:
@@ -34,9 +35,7 @@ def sample_params(
     return params
 
 
-def build_demes_graph(
-    model_type: str, sampled_params: Dict[str, float]
-) -> demes.Graph:
+def build_demes_graph(model_type: str, sampled_params: Dict[str, float]) -> demes.Graph:
     """
     Build a Demes graph for the given model_type + sampled_params.
     Mirrors the logic inside simulation(...), but returns only the graph.
@@ -45,12 +44,12 @@ def build_demes_graph(
         return IM_symmetric_model(sampled_params)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
-    
+
 
 def simulation_runner(
     g: demes.Graph, experiment_config: Dict[str, Any]
 ) -> Tuple[tskit.TreeSequence, demes.Graph]:
-    
+
     species = experiment_config.get("species", "HomSap")
     sp = sps.get_species(species)
 
@@ -65,15 +64,15 @@ def simulation_runner(
 
     genome_length = experiment_config["genome_length"]
     mutation_rate = experiment_config["mutation_rate"]
-    recombination_rate = experiment_config['recombination_rate']
+    recombination_rate = experiment_config["recombination_rate"]
 
     contig = sp.get_contig(
-          chromosome=None,
-          length=genome_length,
-          mutation_rate=mutation_rate,
-          recombination_rate=recombination_rate,
-      )
-    
+        chromosome=None,
+        length=genome_length,
+        mutation_rate=mutation_rate,
+        recombination_rate=recombination_rate,
+    )
+
     print(f'• Using engine: {experiment_config.get("engine")}')
     print("contig.length:", contig.length)
     print("contig.mutation_rate:", contig.mutation_rate)
@@ -86,12 +85,7 @@ def simulation_runner(
 
     eng = sps.get_engine("msprime")
 
-    ts = eng.simulate(
-        model,
-        contig,
-        samples,
-        seed=seed
-    )
+    ts = eng.simulate(model, contig, samples, seed=seed)
 
     return ts, g
 
@@ -105,10 +99,7 @@ def simulation(
 
     g = build_demes_graph(model_type=model_type, sampled_params=sampled_params)
 
-    return simulation_runner(
-        g, experiment_config
-    )
-
+    return simulation_runner(g, experiment_config)
 
 
 def _individual_genotype_matrix(ts: tskit.TreeSequence) -> np.ndarray:
@@ -130,6 +121,7 @@ def _individual_genotype_matrix(ts: tskit.TreeSequence) -> np.ndarray:
 
     return G_ind
 
+
 def create_SFS(ts: tskit.TreeSequence) -> moments.Spectrum:
     """Build a moments.Spectrum using pops that have sampled individuals."""
     sample_sets: List[np.ndarray] = []
@@ -149,6 +141,7 @@ def create_SFS(ts: tskit.TreeSequence) -> moments.Spectrum:
     sfs.pop_ids = pop_ids
     return sfs
 
+
 def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
     """
     Simulate a quantitative trait. Two modes:
@@ -165,12 +158,12 @@ def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
     """
     import pandas as pd
 
-    distribution = experiment_config['trait_distribution']
-    mean = experiment_config['trait_distribution_parameters']['mean']
-    std = experiment_config['trait_distribution_parameters']['std']
-    num_causal = int(experiment_config.get('num_causal_variants', 100))
-    heritability = float(experiment_config.get('heritability', 0.7))
-    random_seed = int(experiment_config.get('seed', 42))
+    distribution = experiment_config["trait_distribution"]
+    mean = experiment_config["trait_distribution_parameters"]["mean"]
+    std = experiment_config["trait_distribution_parameters"]["std"]
+    num_causal = int(experiment_config.get("num_causal_variants", 100))
+    heritability = float(experiment_config.get("heritability", 0.7))
+    random_seed = int(experiment_config.get("seed", 42))
 
     arch_cfg = experiment_config.get("causal_architecture", {}) or {}
     pop_specific = bool(arch_cfg.get("population_specific_causals", False))
@@ -226,18 +219,32 @@ def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
             node_id = ind.nodes[0]
             pop_id = ts.node(node_id).population
             pop_meta = ts.population(pop_id).metadata
-            pop_name = pop_meta.get("name", f"pop{pop_id}") if isinstance(pop_meta, dict) else f"pop{pop_id}"
+            pop_name = (
+                pop_meta.get("name", f"pop{pop_id}")
+                if isinstance(pop_meta, dict)
+                else f"pop{pop_id}"
+            )
             population_map[ind.id] = pop_name
             indiv_pops.append(pop_name)
         indiv_pops = np.array(indiv_pops)
 
-        phenotype_df = pd.DataFrame({
-            "individual_id": np.arange(num_inds, dtype=int),
-            "population": indiv_pops,
-            "genetic_value": g_values,
-            "environmental_noise": env_noise,
-            "phenotype": phenotypes,
-        })[["individual_id", "population", "genetic_value", "environmental_noise", "phenotype"]]
+        phenotype_df = pd.DataFrame(
+            {
+                "individual_id": np.arange(num_inds, dtype=int),
+                "population": indiv_pops,
+                "genetic_value": g_values,
+                "environmental_noise": env_noise,
+                "phenotype": phenotypes,
+            }
+        )[
+            [
+                "individual_id",
+                "population",
+                "genetic_value",
+                "environmental_noise",
+                "phenotype",
+            ]
+        ]
 
         print("realized h2 =", np.var(g_values, ddof=1) / np.var(phenotypes, ddof=1))
 
@@ -299,7 +306,9 @@ def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
         n_unique_target = len(available_sites)
 
     if n_unique_target > 0:
-        target_unique_sites = rng.choice(available_sites, size=n_unique_target, replace=False)
+        target_unique_sites = rng.choice(
+            available_sites, size=n_unique_target, replace=False
+        )
     else:
         target_unique_sites = np.array([], dtype=int)
 
@@ -313,7 +322,9 @@ def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
     # draw new effect sizes for target-unique sites
     if len(target_unique_sites) > 0:
         # same marginal distribution as discovery betas
-        beta_target[target_unique_sites] = rng.normal(loc=mean, scale=std, size=len(target_unique_sites))
+        beta_target[target_unique_sites] = rng.normal(
+            loc=mean, scale=std, size=len(target_unique_sites)
+        )
 
     # 6) Compute genetic values for each individual
     g_values = np.zeros(num_inds, dtype=float)
@@ -339,21 +350,28 @@ def simulate_traits(ts: tskit.TreeSequence, experiment_config: dict) -> Tuple:
     phenotypes = g_values + env_noise
 
     # 8) Build phenotype_df to mirror original structure
-    phenotype_df = pd.DataFrame({
-        "individual_id": np.arange(num_inds, dtype=int),
-        "population": indiv_pops,
-        "genetic_value": g_values,
-        "environmental_noise": env_noise,
-        "phenotype": phenotypes,
-    })
+    phenotype_df = pd.DataFrame(
+        {
+            "individual_id": np.arange(num_inds, dtype=int),
+            "population": indiv_pops,
+            "genetic_value": g_values,
+            "environmental_noise": env_noise,
+            "phenotype": phenotypes,
+        }
+    )
 
     # Keep column order consistent
-    cols = ["individual_id", "population", "genetic_value", "environmental_noise", "phenotype"]
+    cols = [
+        "individual_id",
+        "population",
+        "genetic_value",
+        "environmental_noise",
+        "phenotype",
+    ]
     phenotype_df = phenotype_df[cols]
 
     # trait_df is *discovery* trait (CEU) used as "true causal" in GWAS
     return trait_df, phenotype_df
-
 
 
 def calculate_fst(ts: tskit.TreeSequence) -> float:

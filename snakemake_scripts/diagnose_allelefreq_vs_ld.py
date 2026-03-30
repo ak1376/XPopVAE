@@ -101,6 +101,7 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> C
     model.eval()
     return model
 
+
 def reconstruct_argmax_genotypes(
     model: torch.nn.Module,
     G: np.ndarray,
@@ -116,7 +117,7 @@ def reconstruct_argmax_genotypes(
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, _, _, _, _ = model(x)   # (B,3,L)
+            logits, _, _, _, _ = model(x)  # (B,3,L)
             pred = torch.argmax(logits, dim=1)  # (B,L)
             recon_batches.append(pred.cpu().numpy())
 
@@ -134,7 +135,9 @@ def compute_global_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> 
     return float(np.mean(recalls))
 
 
-def compute_per_snp_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+def compute_per_snp_balanced_accuracy(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> np.ndarray:
     n_snps = y_true.shape[1]
     out = np.full(n_snps, np.nan, dtype=float)
 
@@ -164,7 +167,9 @@ def compute_maf(G: np.ndarray) -> np.ndarray:
     return maf
 
 
-def make_frequency_baseline_from_train(train_G: np.ndarray, eval_G: np.ndarray) -> np.ndarray:
+def make_frequency_baseline_from_train(
+    train_G: np.ndarray, eval_G: np.ndarray
+) -> np.ndarray:
     """
     Predict each SNP in eval set using rounded mean genotype from train set.
     Returns shape (n_eval_individuals, n_snps)
@@ -285,14 +290,26 @@ def save_summary_text(
         f.write(f"Eval genotype matrix: {eval_path}\n\n")
 
         f.write(f"Global balanced accuracy (VAE, original SNP order): {acc_vae:.6f}\n")
-        f.write(f"Global balanced accuracy (VAE, shuffled SNP order): {acc_shuffle:.6f}\n")
-        f.write(f"Global balanced accuracy (frequency baseline):      {acc_baseline:.6f}\n\n")
+        f.write(
+            f"Global balanced accuracy (VAE, shuffled SNP order): {acc_shuffle:.6f}\n"
+        )
+        f.write(
+            f"Global balanced accuracy (frequency baseline):      {acc_baseline:.6f}\n\n"
+        )
 
         f.write("Interpretation guide:\n")
-        f.write("- If shuffled accuracy is close to original accuracy, the model relies more on allele-frequency-like information.\n")
-        f.write("- If shuffled accuracy drops substantially, the model relies more on LD/local SNP order.\n")
-        f.write("- If VAE barely beats the frequency baseline, much of its predictive power may come from allele-frequency information.\n")
-        f.write("- If VAE clearly beats the baseline, it is using additional information beyond per-SNP mean genotype.\n")
+        f.write(
+            "- If shuffled accuracy is close to original accuracy, the model relies more on allele-frequency-like information.\n"
+        )
+        f.write(
+            "- If shuffled accuracy drops substantially, the model relies more on LD/local SNP order.\n"
+        )
+        f.write(
+            "- If VAE barely beats the frequency baseline, much of its predictive power may come from allele-frequency information.\n"
+        )
+        f.write(
+            "- If VAE clearly beats the baseline, it is using additional information beyond per-SNP mean genotype.\n"
+        )
     print(f"Saved text summary to: {output_path}")
 
 
@@ -393,10 +410,14 @@ def main():
     print(f"Evaluation matrix shape: {G_eval.shape}")
 
     if G_train.ndim != 2 or G_eval.ndim != 2:
-        raise ValueError("Expected both genotype matrices to have shape (n_individuals, n_snps)")
+        raise ValueError(
+            "Expected both genotype matrices to have shape (n_individuals, n_snps)"
+        )
 
     if G_train.shape[1] != G_eval.shape[1]:
-        raise ValueError("Training and evaluation matrices must have the same number of SNPs")
+        raise ValueError(
+            "Training and evaluation matrices must have the same number of SNPs"
+        )
 
     # ------------------------------------------------------------
     # 1. Original-order VAE reconstruction
@@ -412,7 +433,9 @@ def main():
     print(f"Global balanced accuracy (VAE, original order): {acc_vae:.6f}")
 
     np.save(args.output_dir / "reconstructed_eval_argmax.npy", G_eval_vae)
-    print(f"Saved original-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax.npy'}")
+    print(
+        f"Saved original-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax.npy'}"
+    )
 
     make_and_save_confusion_matrix(
         y_true=G_eval,
@@ -442,9 +465,14 @@ def main():
     acc_shuffle = compute_global_balanced_accuracy(G_eval, G_eval_vae_shuffled)
     print(f"Global balanced accuracy (VAE, shuffled SNP order): {acc_shuffle:.6f}")
 
-    np.save(args.output_dir / "reconstructed_eval_argmax_shuffled_input.npy", G_eval_vae_shuffled)
+    np.save(
+        args.output_dir / "reconstructed_eval_argmax_shuffled_input.npy",
+        G_eval_vae_shuffled,
+    )
     np.save(args.output_dir / "snp_permutation.npy", perm)
-    print(f"Saved shuffled-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax_shuffled_input.npy'}")
+    print(
+        f"Saved shuffled-order reconstructed genotypes to: {args.output_dir / 'reconstructed_eval_argmax_shuffled_input.npy'}"
+    )
     print(f"Saved SNP permutation to: {args.output_dir / 'snp_permutation.npy'}")
 
     make_and_save_confusion_matrix(
@@ -463,8 +491,12 @@ def main():
     acc_baseline = compute_global_balanced_accuracy(G_eval, G_eval_baseline)
     print(f"Global balanced accuracy (frequency baseline): {acc_baseline:.6f}")
 
-    np.save(args.output_dir / "reconstructed_eval_frequency_baseline.npy", G_eval_baseline)
-    print(f"Saved frequency baseline predictions to: {args.output_dir / 'reconstructed_eval_frequency_baseline.npy'}")
+    np.save(
+        args.output_dir / "reconstructed_eval_frequency_baseline.npy", G_eval_baseline
+    )
+    print(
+        f"Saved frequency baseline predictions to: {args.output_dir / 'reconstructed_eval_frequency_baseline.npy'}"
+    )
 
     make_and_save_confusion_matrix(
         y_true=G_eval,
@@ -546,7 +578,9 @@ def main():
         global_bal_acc_shuffle=acc_shuffle,
         global_bal_acc_baseline=acc_baseline,
     )
-    print(f"Saved compact numeric summary to: {args.output_dir / 'diagnostic_summary.npz'}")
+    print(
+        f"Saved compact numeric summary to: {args.output_dir / 'diagnostic_summary.npz'}"
+    )
 
 
 if __name__ == "__main__":

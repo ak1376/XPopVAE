@@ -142,7 +142,7 @@ def reconstruct_argmax_genotypes(
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, _, _, _, _ = model(x)   # (B,3,L)
+            logits, _, _, _, _ = model(x)  # (B,3,L)
             pred = torch.argmax(logits, dim=1)  # (B,L)
             recon_batches.append(pred.cpu().numpy())
 
@@ -273,7 +273,9 @@ def compute_ld_decay_by_bp(
     return bin_centers, mean_r2, count_r2
 
 
-def compute_curve_metrics(truth_r2: np.ndarray, recon_r2: np.ndarray) -> dict[str, float]:
+def compute_curve_metrics(
+    truth_r2: np.ndarray, recon_r2: np.ndarray
+) -> dict[str, float]:
     valid = np.isfinite(truth_r2) & np.isfinite(recon_r2)
     if not np.any(valid):
         return {
@@ -332,7 +334,9 @@ def save_ld_curve_arrays(
     print(f"Saved LD curve arrays to: {output_path}")
 
 
-def make_title(base_title: str, metrics: dict[str, float], include_metrics: bool) -> str:
+def make_title(
+    base_title: str, metrics: dict[str, float], include_metrics: bool
+) -> str:
     if not include_metrics:
         return base_title
     return (
@@ -352,7 +356,9 @@ def plot_ld_decay(
 ) -> None:
     plt.figure(figsize=(7, 5))
     plt.plot(distances, truth_r2, label="Ground truth", marker="o", markersize=3)
-    plt.plot(distances, recon_r2, label="Reconstructed (argmax)", marker="o", markersize=3)
+    plt.plot(
+        distances, recon_r2, label="Reconstructed (argmax)", marker="o", markersize=3
+    )
 
     if distance_mode == "bp":
         plt.xlabel("Physical distance (bp)")
@@ -435,7 +441,9 @@ def main():
         if not np.array_equal(distances, distances2):
             raise RuntimeError("Distance arrays do not match.")
         if not np.array_equal(pair_counts, pair_counts_recon):
-            print("Warning: pair count arrays differ between truth and recon. Using truth counts in output.")
+            print(
+                "Warning: pair count arrays differ between truth and recon. Using truth counts in output."
+            )
     else:
         print("Computing LD decay for ground truth by SNP lag...")
         distances, truth_r2 = compute_ld_decay_by_lag(
@@ -504,7 +512,9 @@ def main():
         f.write("\n")
         if pair_counts is not None:
             f.write("First 10 bins / pair counts / truth / recon / diff:\n")
-            for d, c, t, r in zip(distances[:10], pair_counts[:10], truth_r2[:10], recon_r2[:10]):
+            for d, c, t, r in zip(
+                distances[:10], pair_counts[:10], truth_r2[:10], recon_r2[:10]
+            ):
                 f.write(f"{d}\t{c}\t{t:.6f}\t{r:.6f}\t{(r-t):.6f}\n")
         else:
             f.write("First 10 distances / truth / recon / diff:\n")

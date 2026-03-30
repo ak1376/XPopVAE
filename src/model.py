@@ -13,6 +13,7 @@ class ConvVAE(nn.Module):
         padding,
         latent_dim,
         num_classes=3,
+        num_domains=2,
         use_batchnorm=False,
         activation="elu",
         pheno_dim=1,
@@ -28,6 +29,7 @@ class ConvVAE(nn.Module):
         self.padding = padding
         self.latent_dim = latent_dim
         self.num_classes = num_classes
+        self.num_domains = num_domains
         self.use_batchnorm = use_batchnorm
         self.activation = activation
         self.encoder_lengths = [input_length]
@@ -71,7 +73,7 @@ class ConvVAE(nn.Module):
         self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
-        # phenotype head
+        # phenotype head: predict phenotype from mu
         if pheno_hidden_dim is None:
             self.pheno_head = nn.Linear(latent_dim, pheno_dim)
         else:
@@ -80,6 +82,11 @@ class ConvVAE(nn.Module):
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
+
+        # domain head: predict population membership from mu
+        # outputs raw logits for num_domains classes (CEU=0, YRI=1)
+        # GRL is applied externally in train.py before this head is called
+        self.domain_head = nn.Linear(latent_dim, num_domains)
 
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
@@ -137,7 +144,9 @@ class ConvVAE(nn.Module):
         return ((length + 2 * padding - kernel_size) // stride) + 1
 
     @staticmethod
-    def compute_transpose_output_length(length, kernel_size, stride, padding, output_padding):
+    def compute_transpose_output_length(
+        length, kernel_size, stride, padding, output_padding
+    ):
         return (length - 1) * stride - 2 * padding + kernel_size + output_padding
 
     def reparameterize(self, mu, logvar):
@@ -165,8 +174,12 @@ class ConvVAE(nn.Module):
 
         z = self.reparameterize(mu, logvar)
 
-        # phenotype prediction from latent
-        pheno_pred = self.pheno_head(mu)   # or self.pheno_head(z)
+        # phenotype prediction from mu (no GRL — pheno head is not adversarial)
+        pheno_pred = self.pheno_head(mu)
+
+        # domain logits returned from mu directly — GRL applied externally
+        # in train.py before passing mu to domain_head during training
+        domain_logits = self.domain_head(mu)
 
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
@@ -175,7 +188,9 @@ class ConvVAE(nn.Module):
         for i, layer in enumerate(self.decoder):
             out = layer(out)
             if verbose:
-                print(f"Decoder layer {i:02d} ({layer.__class__.__name__}): {out.shape}")
+                print(
+                    f"Decoder layer {i:02d} ({layer.__class__.__name__}): {out.shape}"
+                )
 
         expected_shape = (x.size(0), self.num_classes, x.size(2))
         if out.shape != expected_shape:
@@ -183,4 +198,4 @@ class ConvVAE(nn.Module):
                 f"Decoder output shape {out.shape} does not match expected logits shape {expected_shape}"
             )
 
-        return out, mu, logvar, z, pheno_pred
+        return out, mu, logvar, z, pheno_pred, domain_logits

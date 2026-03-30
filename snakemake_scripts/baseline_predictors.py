@@ -30,23 +30,23 @@ from sklearn.linear_model import LassoLarsCV, LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-
 # ---------------------------------------------------------------------------
 # gBLUP
 # ---------------------------------------------------------------------------
 
+
 def build_grm(X: np.ndarray) -> np.ndarray:
     """VanRaden (2008) GRM: G = WW' / [2 * sum p(1-p)]"""
-    p     = X.mean(axis=0) / 2.0
-    W     = X - 2 * p
+    p = X.mean(axis=0) / 2.0
+    W = X - 2 * p
     denom = 2.0 * np.sum(p * (1.0 - p))
     return (W @ W.T) / denom
 
 
 def build_cross_grm(X_new, X_train, p):
-    W_new   = X_new   - 2 * p
+    W_new = X_new - 2 * p
     W_train = X_train - 2 * p
-    denom   = 2.0 * np.sum(p * (1.0 - p))
+    denom = 2.0 * np.sum(p * (1.0 - p))
     return (W_new @ W_train.T) / denom
 
 
@@ -59,10 +59,10 @@ class GBLUPPredictor:
         return np.linalg.solve(G + lam * np.eye(len(G)), y_c)
 
     def fit(self, X_train, y_train, X_val=None, y_val=None, lambdas=None):
-        self.mu_      = y_train.mean()
-        self.p_       = X_train.mean(axis=0) / 2.0
+        self.mu_ = y_train.mean()
+        self.p_ = X_train.mean(axis=0) / 2.0
         self.X_train_ = X_train.copy()
-        G   = build_grm(X_train)
+        G = build_grm(X_train)
         y_c = y_train - self.mu_
 
         if self.h2 is not None:
@@ -71,7 +71,7 @@ class GBLUPPredictor:
             if X_val is None or y_val is None:
                 raise ValueError("Provide X_val/y_val when h2 is None.")
             lambdas = lambdas if lambdas is not None else np.logspace(-3, 3, 50)
-            G_cv    = build_cross_grm(X_val, X_train, self.p_)
+            G_cv = build_cross_grm(X_val, X_train, self.p_)
             best_r2, best_lam = -np.inf, lambdas[0]
             for lam in lambdas:
                 r2 = r2_score(y_val, self.mu_ + G_cv @ self._solve(G, y_c, lam))
@@ -90,36 +90,46 @@ class GBLUPPredictor:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def evaluate(y_true, y_pred):
     return {
-        "r2":   r2_score(y_true, y_pred),
-        "mse":  mean_squared_error(y_true, y_pred),
+        "r2": r2_score(y_true, y_pred),
+        "mse": mean_squared_error(y_true, y_pred),
         "rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
     }
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--x_train",     required=True)
-    p.add_argument("--y_train",     required=True)
-    p.add_argument("--x_val",       required=True)
-    p.add_argument("--y_val",       required=True)
-    p.add_argument("--x_test",      required=True)
-    p.add_argument("--y_test",      required=True)
-    p.add_argument("--out_dir",     default="results/baselines")
-    p.add_argument("--h2",          type=float, default=0.7)
-    p.add_argument("--seed",        type=int,   default=42)
+    p.add_argument("--x_train", required=True)
+    p.add_argument("--y_train", required=True)
+    p.add_argument("--x_val", required=True)
+    p.add_argument("--y_val", required=True)
+    p.add_argument("--x_test", required=True)
+    p.add_argument("--y_test", required=True)
+    p.add_argument("--out_dir", default="results/baselines")
+    p.add_argument("--h2", type=float, default=0.7)
+    p.add_argument("--seed", type=int, default=42)
     p.add_argument("--standardize", action="store_true")
-    p.add_argument("--n_jobs",      type=int,   default=-1,
-                   help="Parallel jobs for LassoLarsCV (-1 = all cores)")
-    p.add_argument("--max_n_alphas",type=int,   default=100,
-                   help="Max alphas on the LARS path (default 100; lower = faster)")
+    p.add_argument(
+        "--n_jobs",
+        type=int,
+        default=-1,
+        help="Parallel jobs for LassoLarsCV (-1 = all cores)",
+    )
+    p.add_argument(
+        "--max_n_alphas",
+        type=int,
+        default=100,
+        help="Max alphas on the LARS path (default 100; lower = faster)",
+    )
     return p.parse_args()
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -128,17 +138,17 @@ def main():
     print("Loading data...")
     X_train = np.load(args.x_train)
     y_train = np.load(args.y_train)
-    X_val   = np.load(args.x_val)
-    y_val   = np.load(args.y_val)
-    X_test  = np.load(args.x_test)
-    y_test  = np.load(args.y_test)
+    X_val = np.load(args.x_val)
+    y_val = np.load(args.y_val)
+    X_test = np.load(args.x_test)
+    y_test = np.load(args.y_test)
     print(f"  Train {X_train.shape}  Val {X_val.shape}  Test {X_test.shape}")
 
     if args.standardize:
-        scaler  = StandardScaler()
+        scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
-        X_val   = scaler.transform(X_val)
-        X_test  = scaler.transform(X_test)
+        X_val = scaler.transform(X_val)
+        X_test = scaler.transform(X_test)
         print("  SNPs standardized.")
 
     # Train+val for CV-based methods
@@ -170,8 +180,12 @@ def main():
         log(f"--- {name} ---")
         if extra:
             log(f"  {extra}")
-        log(f"  Val  R2={val_m['r2']:.4f}  RMSE={val_m['rmse']:.4f}  MSE={val_m['mse']:.4f}")
-        log(f"  Test R2={test_m['r2']:.4f}  RMSE={test_m['rmse']:.4f}  MSE={test_m['mse']:.4f}")
+        log(
+            f"  Val  R2={val_m['r2']:.4f}  RMSE={val_m['rmse']:.4f}  MSE={val_m['mse']:.4f}"
+        )
+        log(
+            f"  Test R2={test_m['r2']:.4f}  RMSE={test_m['rmse']:.4f}  MSE={test_m['mse']:.4f}"
+        )
         log()
 
     # -------------------------------------------------------------------------
@@ -179,9 +193,11 @@ def main():
     # -------------------------------------------------------------------------
     log("Fitting Linear Regression...")
     lr = LinearRegression().fit(X_train, y_train)
-    report("Linear Regression",
-           evaluate(y_val,  lr.predict(X_val)),
-           evaluate(y_test, lr.predict(X_test)))
+    report(
+        "Linear Regression",
+        evaluate(y_val, lr.predict(X_val)),
+        evaluate(y_test, lr.predict(X_test)),
+    )
 
     # -------------------------------------------------------------------------
     # 2. Ridge
@@ -194,10 +210,12 @@ def main():
             best_r2, best_a = r2, a
 
     ridge = Ridge(alpha=best_a).fit(X_train, y_train)
-    report("Ridge Regression",
-           evaluate(y_val,  ridge.predict(X_val)),
-           evaluate(y_test, ridge.predict(X_test)),
-           extra=f"Best alpha={best_a:.4g}")
+    report(
+        "Ridge Regression",
+        evaluate(y_val, ridge.predict(X_val)),
+        evaluate(y_test, ridge.predict(X_test)),
+        extra=f"Best alpha={best_a:.4g}",
+    )
 
     # -------------------------------------------------------------------------
     # 3. Lasso via LassoLarsCV
@@ -219,20 +237,23 @@ def main():
     # -------------------------------------------------------------------------
     log("Fitting Lasso via LassoLarsCV...")
     llcv = LassoLarsCV(
-        cv           = 5,
-        max_n_alphas = args.max_n_alphas,
-        n_jobs       = args.n_jobs,
+        cv=5,
+        max_n_alphas=args.max_n_alphas,
+        n_jobs=args.n_jobs,
     ).fit(X_tv, y_tv)
 
     # Refit on train only with CV-chosen alpha for fair val evaluation
     from sklearn.linear_model import LassoLars
+
     lasso = LassoLars(alpha=llcv.alpha_).fit(X_train, y_train)
 
     n_nz = int(np.sum(lasso.coef_ != 0))
-    report("Lasso (LassoLarsCV)",
-           evaluate(y_val,  lasso.predict(X_val)),
-           evaluate(y_test, lasso.predict(X_test)),
-           extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}")
+    report(
+        "Lasso (LassoLarsCV)",
+        evaluate(y_val, lasso.predict(X_val)),
+        evaluate(y_test, lasso.predict(X_test)),
+        extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}",
+    )
 
     # -------------------------------------------------------------------------
     # 4. gBLUP
@@ -240,10 +261,12 @@ def main():
     log("Fitting gBLUP...")
     gblup = GBLUPPredictor(h2=args.h2 if args.h2 > 0 else None)
     gblup.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-    report("gBLUP",
-           evaluate(y_val,  gblup.predict(X_val)),
-           evaluate(y_test, gblup.predict(X_test)),
-           extra=f"lambda={gblup.lambda_:.4g}  (h2={args.h2})")
+    report(
+        "gBLUP",
+        evaluate(y_val, gblup.predict(X_val)),
+        evaluate(y_test, gblup.predict(X_test)),
+        extra=f"lambda={gblup.lambda_:.4g}  (h2={args.h2})",
+    )
 
     # -------------------------------------------------------------------------
     # Summary
@@ -252,15 +275,15 @@ def main():
     log("SUMMARY — generalisation gap (Val R2 - Test R2)")
     log("=" * 60)
     rows = [
-        ("Linear Regression",   lr.predict(X_val),    lr.predict(X_test)),
-        ("Ridge Regression",    ridge.predict(X_val), ridge.predict(X_test)),
+        ("Linear Regression", lr.predict(X_val), lr.predict(X_test)),
+        ("Ridge Regression", ridge.predict(X_val), ridge.predict(X_test)),
         ("Lasso (LassoLarsCV)", lasso.predict(X_val), lasso.predict(X_test)),
-        ("gBLUP",               gblup.predict(X_val), gblup.predict(X_test)),
+        ("gBLUP", gblup.predict(X_val), gblup.predict(X_test)),
     ]
     log(f"  {'Model':<24}  {'Val R2':>8}  {'Test R2':>8}  {'Gap':>8}")
     log(f"  {'-'*24}  {'-'*8}  {'-'*8}  {'-'*8}")
     for name, pv, pt in rows:
-        rv = r2_score(y_val,  pv)
+        rv = r2_score(y_val, pv)
         rt = r2_score(y_test, pt)
         log(f"  {name:<24}  {rv:>8.4f}  {rt:>8.4f}  {rv - rt:>8.4f}")
     log()

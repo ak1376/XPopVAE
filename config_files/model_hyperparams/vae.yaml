@@ -9,7 +9,7 @@ model:
 
 training:
   batch_size: 64
-  max_epochs: 10
+  max_epochs: 300
   lr: 1e-4
   beta: 0.07
   weight_decay: 0.0
@@ -22,6 +22,7 @@ training:
   compute_clean_metrics_train: true
   compute_clean_metrics_val: true
   patience: 40
+  lambda_grl: 0.01
 
 masking:
   enabled: false
@@ -46,7 +47,7 @@ seed: 0
 grid:
   enabled: false
   name:
-    prefix: "vae_gamma_pheno"
+    prefix: "vae"
     sep: "__"
   dims:
     # - path: "masking.mask_frac"
@@ -55,9 +56,12 @@ grid:
     # - path: "model.latent_dim"
     #   values: [8, 16, 32, 64, 128, 256]
     #   tag: "latdim"
-    - path: "phenotype.gamma"
-      values: [0.001, 0.01, 0.05, 1.0]
-      tag: "gamma"
+    # - path: "phenotype.gamma"
+    #   values: [0.001, 0.01, 0.05, 1.0]
+    #   tag: "gamma"
+    - path: "phenotype.pheno_hidden_dim"
+      values: [3,4,5]
+      tag: "phdim"
 
 
   

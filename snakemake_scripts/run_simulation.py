@@ -36,11 +36,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from simulation import (  # noqa: E402
-    simulation,   # engine-aware (msprime = neutral; slim = BGS)
-    create_SFS,   # builds a moments.Spectrum from the ts,
+    simulation,  # engine-aware (msprime = neutral; slim = BGS)
+    create_SFS,  # builds a moments.Spectrum from the ts,
     simulate_traits,
     calculate_fst,
-    sample_params
+    sample_params,
 )
 
 
@@ -61,29 +61,35 @@ def run_simulation(
     engine = cfg["engine"]  # "msprime" or "slim"
 
     sel_cfg = cfg.get("selection") or {}
-    
+
     # decide destination folder name
     if output_dir is not None:
         out_dir = output_dir
         # If simulation_number is not provided but we need it for logic, we might need to infer or require it.
         # But here simulation_number is passed from CLI usually.
         if simulation_number is None:
-             # fallback if needed, but usually provided
-             simulation_number = "0000" 
+            # fallback if needed, but usually provided
+            simulation_number = "0000"
     else:
         if simulation_number is None:
-            existing = {int(p.name) for p in simulation_dir.glob("[0-9]*") if p.is_dir()}
+            existing = {
+                int(p.name) for p in simulation_dir.glob("[0-9]*") if p.is_dir()
+            }
             simulation_number = f"{max(existing, default=0) + 1:04d}"
         out_dir = simulation_dir / simulation_number
-    
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate unique seed for this simulation
     base_seed = cfg.get("seed")
     if base_seed is not None:
         # Use simulation_number (grid index) + replicate to make a unique seed
-        simulation_seed = int(base_seed) + int(simulation_number) * 1000 + int(replicate)
-        print(f"• Using seed {simulation_seed} (base: {base_seed}, grid: {simulation_number}, rep: {replicate})")
+        simulation_seed = (
+            int(base_seed) + int(simulation_number) * 1000 + int(replicate)
+        )
+        print(
+            f"• Using seed {simulation_seed} (base: {base_seed}, grid: {simulation_number}, rep: {replicate})"
+        )
         rng = np.random.default_rng(simulation_seed)
     else:
         simulation_seed = None
@@ -105,7 +111,9 @@ def run_simulation(
         # simulation_number is now the grid index (0 .. num_grid-1)
         grid_idx = int(simulation_number)
         if grid_idx < 0 or grid_idx >= num_grid:
-            raise ValueError(f"Simulation number {grid_idx} out of range [0, {num_grid}).")
+            raise ValueError(
+                f"Simulation number {grid_idx} out of range [0, {num_grid})."
+            )
 
         if scale == "linear":
             grid_vals = np.linspace(min_val, max_val, num_grid)
@@ -118,11 +126,12 @@ def run_simulation(
         sampled_params = dict(fixed)
         sampled_params[var_param] = val
 
-        print(f"• Grid mode: {var_param} = {val:.2f} "
-              f"(grid index {grid_idx}/{num_grid-1}, replicate {replicate})")
+        print(
+            f"• Grid mode: {var_param} = {val:.2f} "
+            f"(grid index {grid_idx}/{num_grid-1}, replicate {replicate})"
+        )
     else:
         sampled_params = sample_params(cfg["priors"], rng=rng)
-
 
     if engine == "msprime":
         # Neutral path: NO BGS and NO coverage sampling
@@ -136,21 +145,23 @@ def run_simulation(
     sim_cfg = dict(cfg)
     if simulation_seed is not None:
         sim_cfg["seed"] = simulation_seed
-    
-    ts, g = simulation(sampled_params = sampled_params, model_type = model_type, experiment_config = sim_cfg)
+
+    ts, g = simulation(
+        sampled_params=sampled_params, model_type=model_type, experiment_config=sim_cfg
+    )
 
     # Get both trait effect sizes and complete phenotype simulation (with population info)
     trait_df, phenotype_df = simulate_traits(ts, cfg)
-    
+
     # Save effect sizes from sim_trait as DataFrame (preserves column names)
     trait_df.to_pickle(f"{out_dir}/effect_sizes.pkl")
-    
+
     # Save phenotype data as DataFrame (includes population, genetic_value, environmental_noise, phenotype)
     phenotype_df.to_pickle(f"{out_dir}/phenotype.pkl")
 
     # Build SFS from result
     sfs = create_SFS(ts)
-    
+
     # Calculate Fst
     fst_val = calculate_fst(ts)
     sampled_params["Fst"] = fst_val
@@ -182,7 +193,9 @@ def run_simulation(
 # argparse entry-point
 # ------------------------------------------------------------------
 def main():
-    cli = argparse.ArgumentParser(description="Generate one simulation (neutral or BGS, engine-aware)")
+    cli = argparse.ArgumentParser(
+        description="Generate one simulation (neutral or BGS, engine-aware)"
+    )
     cli.add_argument(
         "--simulation-dir",
         type=Path,
@@ -198,9 +211,7 @@ def main():
     cli.add_argument(
         "--model-type",
         required=True,
-        choices=[
-            "IM_symmetric"
-        ],
+        choices=["IM_symmetric"],
         help="Which demographic model to simulate",
     )
     cli.add_argument(
@@ -215,7 +226,7 @@ def main():
         default=0,
         help="Replicate index for this parameter setting (used only for the seed).",
     )
-    
+
     cli.add_argument(
         "--output-dir",
         type=Path,
@@ -231,6 +242,7 @@ def main():
         args.replicate,
         args.output_dir,
     )
+
 
 if __name__ == "__main__":
     main()
