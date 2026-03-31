@@ -2,7 +2,18 @@ import torch
 from src.loss import recon_unmasked_loss, recon_masked_loss, kl_loss, phenotype_loss
 
 
-def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha=1.0, beta=1.0, gamma=1.0, lambda_ortho=1e-3):
+def train_one_epoch(
+    model,
+    dataloader,
+    optimizer,
+    device,
+    loss_fn,
+    masker,
+    alpha=1.0,
+    beta=1.0,
+    gamma=1.0,
+    lambda_ortho=1e-3,
+):
     model.train()
 
     total_loss           = 0.0
@@ -10,7 +21,7 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
     total_recon_masked   = 0.0
     total_kl_loss        = 0.0
     total_phenotype_loss = 0.0
-    total_ortho_loss     = 0.0   # NEW
+    total_ortho_loss     = 0.0
 
     for x, pheno, pop_label in dataloader:
         x         = x.to(device)
@@ -33,7 +44,13 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked   = recon_masked_loss(logits, targets, mask)
         kl             = kl_loss(mu, logvar)
-        pheno_loss_val = phenotype_loss(pheno_pred, pheno)
+
+        # only compute phenotype loss on CEU (pop_label == 0)
+        ceu_mask = (pop_label == 0)
+        if ceu_mask.any():
+            pheno_loss_val = phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
+        else:
+            pheno_loss_val = torch.tensor(0.0, device=device)
 
         loss, recon_unmasked_val, recon_masked_val, kl_val, pheno_val, ortho_val = loss_fn(
             recon_unmasked=recon_unmasked,
@@ -57,7 +74,7 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         total_recon_masked   += recon_masked_val.item()
         total_kl_loss        += kl_val.item()
         total_phenotype_loss += pheno_val.item()
-        total_ortho_loss     += ortho_val.item()   # NEW
+        total_ortho_loss     += ortho_val.item()
 
     n = len(dataloader)
     return (
@@ -66,12 +83,21 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         total_recon_masked   / n,
         total_kl_loss        / n,
         total_phenotype_loss / n,
-        total_ortho_loss     / n,   # NEW
+        total_ortho_loss     / n,
     )
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0, lambda_ortho=1e-3):
+def evaluate(
+    model,
+    dataloader,
+    device,
+    loss_fn,
+    alpha=1.0,
+    beta=1.0,
+    gamma=1.0,
+    lambda_ortho=1e-3,
+):
     model.eval()
 
     total_loss           = 0.0
@@ -79,7 +105,7 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0,
     total_recon_masked   = 0.0
     total_kl_loss        = 0.0
     total_phenotype_loss = 0.0
-    total_ortho_loss     = 0.0   # NEW
+    total_ortho_loss     = 0.0
 
     for input_x, x, pheno, mask, pop_label in dataloader:
         input_x   = input_x.to(device)
@@ -94,7 +120,14 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0,
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked   = recon_masked_loss(logits, targets, mask)
         kl             = kl_loss(mu, logvar)
-        pheno_loss_val = phenotype_loss(pheno_pred, pheno)
+
+        # only compute phenotype loss on CEU (pop_label == 0)
+        # val loader is all CEU so this is a no-op there, but safe for mixed loaders
+        ceu_mask = (pop_label == 0)
+        if ceu_mask.any():
+            pheno_loss_val = phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
+        else:
+            pheno_loss_val = torch.tensor(0.0, device=device)
 
         loss, recon_unmasked_val, recon_masked_val, kl_val, pheno_val, ortho_val = loss_fn(
             recon_unmasked=recon_unmasked,
@@ -114,7 +147,7 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0,
         total_recon_masked   += recon_masked_val.item()
         total_kl_loss        += kl_val.item()
         total_phenotype_loss += pheno_val.item()
-        total_ortho_loss     += ortho_val.item()   # NEW
+        total_ortho_loss     += ortho_val.item()
 
     n = len(dataloader)
     return (
@@ -123,22 +156,22 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0,
         total_recon_masked   / n,
         total_kl_loss        / n,
         total_phenotype_loss / n,
-        total_ortho_loss     / n,   # NEW
+        total_ortho_loss     / n,
     )
 
 
 class EarlyStopping:
     def __init__(self, patience=20, min_delta=1e-4):
-        self.patience    = patience
-        self.min_delta   = min_delta
-        self.best_loss   = float("inf")
+        self.patience       = patience
+        self.min_delta      = min_delta
+        self.best_loss      = float("inf")
         self.num_bad_epochs = 0
 
     def step(self, val_loss):
         if val_loss < self.best_loss - self.min_delta:
             self.best_loss      = val_loss
             self.num_bad_epochs = 0
-            return True, False    # improved, should_stop
+            return True, False
         else:
             self.num_bad_epochs += 1
             return False, self.num_bad_epochs >= self.patience

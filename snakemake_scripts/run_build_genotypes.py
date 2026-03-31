@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 
 from src.build_genotypes import BuildGenotypesArgs, build_genotypes_for_vae
 
-'''
+"""
 python -u snakemake_scripts/run_build_genotypes.py \
   --tree experiments/IM_symmetric/simulations/0/rep0/tree_sequence.trees \
   --phenotype experiments/IM_symmetric/simulations/0/rep0/phenotype.pkl \
@@ -21,33 +21,22 @@ python -u snakemake_scripts/run_build_genotypes.py \
   --maf-threshold 0.05 \
   --subset-mode random \
   --subset-seed 0 \
-  --val-frac 0.2 \
+  --discovery-val-frac 0.2 \
+  --target-test-frac 0.2 \
   --split-seed 0 \
   --subset-snps 5000
-'''
-
-
-def _str2bool(x: str) -> bool:
-    if isinstance(x, bool):
-        return x
-    s = str(x).strip().lower()
-    if s in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if s in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Expected a boolean, got: {x!r}")
+"""
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Snakemake wrapper: build genotype arrays + discovery train/val + target split (optional normalization)."
+        description="Snakemake wrapper: build genotype arrays + discovery train/val + target train/test split."
     )
 
     ap.add_argument("--tree", type=Path, required=True)
     ap.add_argument("--phenotype", type=Path, required=True)
     ap.add_argument("--outdir", type=Path, required=True)
 
-    # Optional YAML config (maf_threshold under data.maf_threshold)
     ap.add_argument(
         "--config",
         type=Path,
@@ -56,7 +45,6 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--maf-threshold", type=float, default=None)
 
-    # NEW: experiment config JSON (reads top-level key: discovery)
     ap.add_argument(
         "--experiment-config-json",
         type=Path,
@@ -67,11 +55,27 @@ def parse_args() -> argparse.Namespace:
     # subsetting
     ap.add_argument("--subset-snps", type=int, default=5000)
     ap.add_argument("--subset-bp", type=float, default=None)
-    ap.add_argument("--subset-mode", type=str, default="first", choices=["first", "middle", "random"])
+    ap.add_argument(
+        "--subset-mode",
+        type=str,
+        default="first",
+        choices=["first", "middle", "random"],
+    )
     ap.add_argument("--subset-seed", type=int, default=0)
 
-    # split (discovery -> train/val; target = non-discovery)
-    ap.add_argument("--val-frac", type=float, default=0.2)
+    # splits
+    ap.add_argument(
+        "--discovery-val-frac",
+        type=float,
+        default=0.2,
+        help="Fraction of discovery population held out for validation.",
+    )
+    ap.add_argument(
+        "--target-test-frac",
+        type=float,
+        default=0.2,
+        help="Fraction of target population held out for test.",
+    )
     ap.add_argument("--split-seed", type=int, default=0)
     ap.add_argument(
         "--discovery-pop",
@@ -100,7 +104,8 @@ def main() -> None:
         subset_bp=args.subset_bp,
         subset_mode=str(args.subset_mode),
         subset_seed=int(args.subset_seed),
-        val_frac=float(args.val_frac),
+        discovery_val_frac=float(args.discovery_val_frac),
+        target_test_frac=float(args.target_test_frac),
         split_seed=int(args.split_seed),
         discovery_pop=args.discovery_pop,
         norm_eps=float(args.norm_eps),

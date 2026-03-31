@@ -46,7 +46,7 @@ phenotype:
 seed: 0
 
 grid:
-  enabled: true
+  enabled: false
   name:
     prefix: "vae_phenotype_experiment"
     sep: "__"

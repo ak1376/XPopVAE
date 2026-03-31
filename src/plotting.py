@@ -5,7 +5,7 @@ import torch
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import confusion_matrix, recall_score
+from sklearn.metrics import confusion_matrix, recall_score, balanced_accuracy_score
 
 
 # ------------------------------------------------------------------
@@ -34,26 +34,19 @@ def _get_input_and_metadata_from_batch(batch, use_masked_input=False):
     Returns
     -------
     x_input : torch.Tensor
-        Input that should be fed into the model.
-    x_true : torch.Tensor
-        True unmasked genotype tensor.
-    pheno : torch.Tensor
-        True phenotype tensor.
+    x_true  : torch.Tensor
+    pheno   : torch.Tensor
     pop_label : torch.Tensor
-        Population labels.
-    mask : torch.Tensor or None
-        Mask tensor if present, else None.
+    mask    : torch.Tensor or None
     """
     if len(batch) == 3:
         x, pheno, pop_label = batch
         x_input = x
         x_true = x
         mask = None
-
     elif len(batch) == 5:
         masked_x, x_true, pheno, mask, pop_label = batch
         x_input = masked_x if use_masked_input else x_true
-
     else:
         raise ValueError(f"Unexpected batch structure of length {len(batch)}")
 
@@ -75,9 +68,7 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
         x_input, _, pheno, pop_label, _ = _get_input_and_metadata_from_batch(
             batch, use_masked_input=use_masked_input
         )
-
         x_input = x_input.to(device)
-
         logits, mu, logvar, z, pheno_pred = model(x_input)
 
         all_true.append(_to_numpy(pheno))
@@ -131,8 +122,6 @@ def plot_pheno_predictions(
     plt.close()
 
     print(f"Saved phenotype prediction plot to: {output_path}")
-    print(f"Phenotype RMSE: {rmse:.6f}")
-    print(f"Phenotype R^2: {r2:.6f}")
 
     return {
         "rmse": float(rmse),
@@ -166,13 +155,7 @@ def plot_pheno_predictions_by_population(
     for pop_value, label in [(0, "CEU/discovery"), (1, "YRI/target")]:
         idx = pop == pop_value
         if np.any(idx):
-            plt.scatter(
-                y_true[idx],
-                y_pred[idx],
-                alpha=0.6,
-                s=20,
-                label=label,
-            )
+            plt.scatter(y_true[idx], y_pred[idx], alpha=0.6, s=20, label=label)
 
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
@@ -200,7 +183,7 @@ def plot_pheno_residuals(
 ):
     model.eval()
 
-    y_true, y_pred, pop = extract_pheno_predictions(
+    y_true, y_pred, _ = extract_pheno_predictions(
         model=model,
         dataloader=dataloader,
         device=device,
@@ -272,7 +255,6 @@ def plot_reconstruction(
     bal_acc = recalls.mean()
 
     cm = confusion_matrix(y_true_flat, y_pred_flat, labels=classes)
-
     cm_row_sums = cm.sum(axis=1, keepdims=True)
     cm_normalized = np.divide(
         cm.astype(float),
@@ -339,9 +321,8 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
         x_input, _, _, pop_label, _ = _get_input_and_metadata_from_batch(
             batch, use_masked_input=use_masked_input
         )
-
         x_input = x_input.to(device)
-        _, mu, _, _, _ = model(x_input)
+        logits, mu, logvar, z, pheno_pred = model(x_input)
 
         all_mu.append(mu.cpu())
         all_labels.append(pop_label.cpu())
@@ -375,12 +356,7 @@ def plot_latent_space(
 
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(
-        mu_2d[:, 0],
-        mu_2d[:, 1],
-        c=all_labels,
-        cmap="coolwarm",
-        alpha=0.7,
-        s=20,
+        mu_2d[:, 0], mu_2d[:, 1], c=all_labels, cmap="coolwarm", alpha=0.7, s=20
     )
     plt.xlabel("latent PC1")
     plt.ylabel("latent PC2")
@@ -410,25 +386,11 @@ def plot_latent_pca_shared_basis(
 
     ceu_pca = pca.transform(ceu_mu_scaled)
     yri_pca = pca.transform(yri_mu_scaled)
-
     explained = pca.explained_variance_ratio_
 
     plt.figure(figsize=(7, 6))
-    plt.scatter(
-        ceu_pca[:, 0],
-        ceu_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=ceu_name,
-    )
-    plt.scatter(
-        yri_pca[:, 0],
-        yri_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=yri_name,
-    )
-
+    plt.scatter(ceu_pca[:, 0], ceu_pca[:, 1], alpha=0.7, s=20, label=ceu_name)
+    plt.scatter(yri_pca[:, 0], yri_pca[:, 1], alpha=0.7, s=20, label=yri_name)
     plt.xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
     plt.ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
     plt.title(f"Latent PCA\nfit on {reference_name}, both projected")
@@ -453,11 +415,9 @@ def plot_loss_curves(
     train_pheno_losses,
     val_pheno_losses,
     output_dir,
-    train_ortho_losses=None,
-    val_ortho_losses=None,
     train_recon_masked_losses=None,
     val_recon_masked_losses=None,
-    
+    train_domain_losses=None,
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
@@ -484,7 +444,6 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_recon_unmasked.png", dpi=300)
     plt.close()
 
-    # only plot masked recon curves when masking was enabled
     if train_recon_masked_losses is not None and val_recon_masked_losses is not None:
         plt.figure(figsize=(8, 5))
         plt.plot(epochs, train_recon_masked_losses, label="train recon masked")
@@ -519,18 +478,17 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
 
-    # Ortho loss — only plot if provided and nonzero
-    if train_ortho_losses is not None and val_ortho_losses is not None:
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(train_ortho_losses, label="train ortho")
-        ax.plot(val_ortho_losses,   label="val ortho")
-        ax.set_xlabel("epoch")
-        ax.set_ylabel("orthogonality loss")
-        ax.set_title("Orthogonality loss (z_recon ⊥ z_pheno)")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(output_dir / "loss_ortho.png", dpi=150)
-        plt.close(fig)
+    if train_domain_losses is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_domain_losses, label="train domain (GRL)")
+        plt.xlabel("epoch")
+        plt.ylabel("domain loss")
+        plt.title("Domain adversarial loss (train only)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/loss_domain.png", dpi=300)
+        plt.close()
+
 
 # ------------------------------------------------------------------
 # masking diagnostic
@@ -544,18 +502,6 @@ def plot_example_input_heatmap(
     snp_start=0,
     snp_count=1000,
 ):
-    """
-    Plot heatmaps for:
-      1) original genotype input
-      2) masked genotype input
-      3) binary mask
-
-    Supports:
-      - original_x, masked_x of shape (N, 1, L) or (N, L)
-      - mask of shape (N, L) or (N, 1, L)
-
-    Assumes mask = 1 at masked positions.
-    """
     snp_end = min(snp_start + snp_count, original_x.shape[-1])
     sample_indices = list(sample_indices)
 
@@ -565,7 +511,9 @@ def plot_example_input_heatmap(
         elif x.ndim == 2:
             return x[sample_indices, snp_start:snp_end].detach().cpu().numpy()
         else:
-            raise ValueError(f"Expected tensor with 2 or 3 dims, got shape {tuple(x.shape)}")
+            raise ValueError(
+                f"Expected tensor with 2 or 3 dims, got shape {tuple(x.shape)}"
+            )
 
     orig = _slice_tensor(original_x, sample_indices, snp_start, snp_end)
     masked = _slice_tensor(masked_x, sample_indices, snp_start, snp_end)
@@ -594,3 +542,159 @@ def plot_example_input_heatmap(
     plt.close()
 
     print(f"Saved masked-input heatmap plot to: {output_path}")
+
+
+# ------------------------------------------------------------------
+# domain separation plots
+# ------------------------------------------------------------------
+@torch.no_grad()
+def extract_domain_probs(model, dataloader, device, use_masked_input=False):
+    """
+    Run all individuals through the encoder + domain_head and return
+    predicted p(YRI) (softmax probability of class 1) alongside true
+    population labels.
+
+    Returns
+    -------
+    p_yri      : np.ndarray, shape (N,)  — predicted prob of being YRI
+    true_labels: np.ndarray, shape (N,)  — 0=CEU, 1=YRI
+    """
+    model.eval()
+
+    all_probs = []
+    all_labels = []
+
+    for batch in dataloader:
+        x_input, _, _, pop_label, _ = _get_input_and_metadata_from_batch(
+            batch, use_masked_input=use_masked_input
+        )
+        x_input = x_input.to(device)
+
+        logits, mu, logvar, z, pheno_pred = model(x_input)
+        probs = torch.softmax(domain_logits, dim=1)[:, 1]  # p(YRI)
+
+        all_probs.append(probs.cpu().numpy())
+        all_labels.append(_to_numpy(pop_label))
+
+    p_yri = np.concatenate(all_probs, axis=0)
+    true_labels = np.concatenate(all_labels, axis=0)
+
+    return p_yri, true_labels
+
+
+def plot_domain_probability_histogram(
+    p_yri,
+    true_labels,
+    output_path,
+    title="Domain classifier: predicted p(YRI)",
+):
+    """
+    Overlapping histogram of predicted p(YRI) for CEU and YRI individuals.
+
+    If the GRL is working well the two distributions should overlap heavily.
+    If the model retains population structure they will separate toward 0 and 1.
+    """
+    ceu_probs = p_yri[true_labels == 0]
+    yri_probs = p_yri[true_labels == 1]
+
+    # domain balanced accuracy from hard predictions
+    hard_preds = (p_yri >= 0.5).astype(int)
+    bal_acc = balanced_accuracy_score(true_labels.astype(int), hard_preds)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bins = np.linspace(0, 1, 25)
+
+    ax.hist(ceu_probs, bins=bins, alpha=0.6, label="CEU (discovery)", density=True)
+    ax.hist(yri_probs, bins=bins, alpha=0.6, label="YRI (target)", density=True)
+
+    ax.axvline(
+        0.5, color="black", linestyle="--", linewidth=0.8, label="decision boundary"
+    )
+    ax.set_xlabel("Predicted p(YRI)")
+    ax.set_ylabel("Density")
+    ax.set_title(f"{title}\nDomain balanced acc = {bal_acc:.3f}")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+    print(f"Saved domain probability histogram to: {output_path}")
+    print(f"Domain balanced accuracy: {bal_acc:.4f}")
+
+    return {"balanced_accuracy": float(bal_acc)}
+
+
+def plot_domain_decile_enrichment(
+    p_yri,
+    true_labels,
+    output_path,
+    title="Domain classifier: YRI enrichment by decile",
+):
+    """
+    Sort all individuals by predicted p(YRI), bin into deciles, and plot
+    the fraction of true YRI individuals in each decile.
+
+    If the domain classifier has no discriminative power (GRL working perfectly)
+    every decile should contain ~50% YRI.
+    If the classifier separates populations well, low deciles will be enriched
+    for CEU and high deciles for YRI.
+    """
+    n = len(p_yri)
+    order = np.argsort(p_yri)
+    sorted_labels = true_labels[order]
+
+    n_deciles = 10
+    decile_size = n // n_deciles
+    # handle remainder by extending the last bin
+    bin_edges = [i * decile_size for i in range(n_deciles)] + [n]
+
+    decile_frac_yri = []
+    decile_mean_prob = []
+
+    for i in range(n_deciles):
+        sl = slice(bin_edges[i], bin_edges[i + 1])
+        decile_frac_yri.append(sorted_labels[sl].mean())
+        decile_mean_prob.append(p_yri[order[sl]].mean())
+
+    decile_labels = [f"D{i+1}" for i in range(n_deciles)]
+    baseline = true_labels.mean()  # overall fraction of YRI
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # left: fraction YRI per decile
+    ax = axes[0]
+    bars = ax.bar(decile_labels, decile_frac_yri, color="steelblue", alpha=0.8)
+    ax.axhline(
+        baseline,
+        color="red",
+        linestyle="--",
+        linewidth=1.0,
+        label=f"overall YRI fraction ({baseline:.2f})",
+    )
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Decile (sorted by predicted p(YRI))")
+    ax.set_ylabel("Fraction true YRI")
+    ax.set_title("YRI enrichment per decile")
+    ax.legend(fontsize=8)
+
+    # right: mean predicted p(YRI) per decile
+    ax2 = axes[1]
+    ax2.bar(decile_labels, decile_mean_prob, color="darkorange", alpha=0.8)
+    ax2.axhline(0.5, color="black", linestyle="--", linewidth=0.8, label="chance (0.5)")
+    ax2.set_ylim(0, 1)
+    ax2.set_xlabel("Decile (sorted by predicted p(YRI))")
+    ax2.set_ylabel("Mean predicted p(YRI)")
+    ax2.set_title("Mean predicted probability per decile")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+    print(f"Saved domain decile enrichment plot to: {output_path}")
+
+    return {
+        "decile_frac_yri": decile_frac_yri,
+        "decile_mean_prob": decile_mean_prob,
+    }
