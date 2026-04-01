@@ -4,48 +4,45 @@ import demes
 
 def IM_symmetric_model(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
     """
-    Split + symmetric migration (YRI/CEU), but *no separate ancestral-only deme*.
-    YRI carries the ancestral epoch pre-split; CEU branches off at T_split.
-
-    This keeps the first deme ("YRI") extant at time 0 => pop0 is extant after msprime.from_demes().
+    Split + symmetric migration (YRI/CEU).
+    YRI is constant size throughout (ancestral + modern).
+    CEU has a bottleneck: small founding size N_CEU_bottleneck expanding to N_CEU.
     """
 
-    required_keys = ["N_anc", "N_YRI", "N_CEU", "m", "T_split"]
+    required_keys = ["N_YRI", "N_CEU", "N_CEU_bottleneck", "m", "T_split", "T_bottleneck"]
     for k in required_keys:
         assert k in sampled, f"Missing required key: {k}"
 
-    N0 = float(sampled["N_anc"])
-    N1 = float(sampled["N_YRI"])
-    N2 = float(sampled["N_CEU"])
-    T  = float(sampled["T_split"])
-    m  = float(sampled["m"])
+    N_YRI         = float(sampled["N_YRI"])
+    N_CEU         = float(sampled["N_CEU"])
+    N_CEU_bot     = float(sampled["N_CEU_bottleneck"])
+    T_split       = float(sampled["T_split"])
+    T_bot         = float(sampled["T_bottleneck"])  # generations after split, so T_split > T_bot > 0
+    m             = float(sampled["m"])
 
-    assert T > 0, "T_split must be > 0"
+    assert T_split > T_bot > 0, "Need T_split > T_bottleneck > 0"
 
     b = demes.Builder(time_units="generations", generation_time=1)
 
-    # Root extant deme YRI:
-    #   - from present back to T: size N1
-    #   - older than T: ancestral size N0
+    # YRI: constant size, carries the root
     b.add_deme(
         "YRI",
-        epochs=[
-            dict(start_size=N0, end_time=T),  # older epoch (ancestral)
-            dict(start_size=N1, end_time=0),  # recent epoch (modern)
-        ],
+        epochs=[dict(start_size=N_YRI, end_time=0)],
     )
 
-    # CEU branches off at split time
+    # CEU: branches off at T_split with bottleneck size, expands to N_CEU at T_bot
     b.add_deme(
         "CEU",
         ancestors=["YRI"],
-        start_time=T,
-        epochs=[dict(start_size=N2, end_time=0)],
+        start_time=T_split,
+        epochs=[
+            dict(start_size=N_CEU_bot, end_time=T_bot),   # bottleneck epoch
+            dict(start_size=N_CEU,     end_time=0),        # post-bottleneck expansion
+        ],
     )
 
-    # Symmetric migration AFTER split (times when both exist: [0, T])
     if m > 0:
-        b.add_migration(source="YRI", dest="CEU", rate=m, start_time=T, end_time=0)
-        b.add_migration(source="CEU", dest="YRI", rate=m, start_time=T, end_time=0)
+        b.add_migration(source="YRI", dest="CEU", rate=m, start_time=T_split, end_time=0)
+        b.add_migration(source="CEU", dest="YRI", rate=m, start_time=T_split, end_time=0)
 
     return b.resolve()

@@ -160,9 +160,9 @@ DISCOVERY_VAL = PROC_BASEDIR / "0/rep0/discovery_val.npy"
 TARGET = PROC_BASEDIR / "0/rep0/target.npy"
 
 # Define the phenotype paths as well
-DISCOVERY_TRAIN_PHENO = PROC_BASEDIR / "0/rep0/discovery_train_pheno.npy"
-DISCOVERY_VAL_PHENO = PROC_BASEDIR / "0/rep0/discovery_val_pheno.npy"
-TARGET_PHENO = PROC_BASEDIR / "0/rep0/target_pheno.npy"
+# DISCOVERY_TRAIN_PHENO = PROC_BASEDIR / "0/rep0/discovery_train_pheno.npy"
+# DISCOVERY_VAL_PHENO = PROC_BASEDIR / "0/rep0/discovery_val_pheno.npy"
+# TARGET_PHENO = PROC_BASEDIR / "0/rep0/target_pheno.npy"
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -550,7 +550,7 @@ rule run_baselines:
         results = PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
     params:
         out_dir = PROC_BASEDIR / "0/rep0/baselines",
-        h2      = float(EXP_CFG.get("h2", 0.7)),
+        h2      = float(EXP_CFG.get("h2", 1.0)),
         seed    = 42,
     shell:
         r"""

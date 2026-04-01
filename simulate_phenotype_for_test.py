@@ -3,18 +3,25 @@
 '''
 This script samples causal SNPs from the genomic window using the TRAIN set,
 fits a phenotype architecture on TRAIN, and then applies that same architecture
-to both TRAIN and VAL.
+to TRAIN, VAL, and TARGET.
 
 Phenotype model:
     y = G + e
 where
     G = X_beta
 and noise variance is chosen to approximately match the requested heritability.
+
+Additionally computes:
+    - Oracle R² (Ridge on causal SNPs only) -- upper bound
+    - Baseline R² (gBLUP / Ridge on all SNPs) -- cross-population baseline to beat
+Both evaluated on within-population VAL and cross-population TARGET.
 '''
 
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from sklearn.linear_model import RidgeCV
+from sklearn.metrics import r2_score
 import os
 
 
@@ -156,7 +163,6 @@ def main():
     val_path = Path(
         "/sietch_colab/akapoor/XPopVAE/experiments/IM_symmetric/processed_data/0/rep0/discovery_val.npy"
     )
-
     target_path = Path(
         "/sietch_colab/akapoor/XPopVAE/experiments/IM_symmetric/processed_data/0/rep0/target.npy"
     )
@@ -164,18 +170,19 @@ def main():
     # -------------------------------------------------
     # load genotypes
     # -------------------------------------------------
-    X_train = np.load(train_path)
-    X_val = np.load(val_path)
+    X_train  = np.load(train_path)
+    X_val    = np.load(val_path)
     X_target = np.load(target_path)
 
-    num_causal = 9000
-    heritability = 0.7
-    seed = 295
+    num_causal  = 100
+    heritability = 1.0
+    seed        = 295
     standardize = True
 
     print("Loaded genotype matrices")
-    print(f"Train genotype shape: {X_train.shape}")
-    print(f"Val genotype shape:   {X_val.shape}")
+    print(f"Train genotype shape:  {X_train.shape}")
+    print(f"Val genotype shape:    {X_val.shape}")
+    print(f"Target genotype shape: {X_target.shape}")
     print()
 
     # -------------------------------------------------
@@ -193,121 +200,156 @@ def main():
     betas = architecture["effect_sizes"]
 
     # -------------------------------------------------
-    # apply same architecture to TRAIN and VAL
+    # apply same architecture to TRAIN, VAL, TARGET
     # -------------------------------------------------
-    y_train, g_train, e_train = apply_phenotype_architecture(
-        X_train,
-        architecture,
-        seed=seed,
-    )
+    y_train,  g_train,  e_train  = apply_phenotype_architecture(X_train,  architecture, seed=seed)
+    y_val,    g_val,    e_val    = apply_phenotype_architecture(X_val,    architecture, seed=seed + 1)
+    y_target, g_target, e_target = apply_phenotype_architecture(X_target, architecture, seed=seed + 2)
 
-    y_val, g_val, e_val = apply_phenotype_architecture(
-        X_val,
-        architecture,
-        seed=seed + 1,
-    )
+    # -------------------------------------------------
+    # Oracle: Ridge on causal SNPs only
+    # Upper bound -- assumes you know exactly which SNPs are causal
+    # -------------------------------------------------
+    print("=" * 60)
+    print("ORACLE (causal SNPs only)")
+    print("=" * 60)
 
-    y_target, g_target, e_target = apply_phenotype_architecture(
-        X_target,
-        architecture,
-        seed=seed + 2,
-    )
+    X_train_causal  = X_train[:, causal_snps]
+    X_val_causal    = X_val[:, causal_snps]
+    X_target_causal = X_target[:, causal_snps]
 
-    # reshape to (N, 1) if you want to save that way
-    # y_train = y_train.reshape(-1, 1)
-    # y_val = y_val.reshape(-1, 1)
-    # y_target = y_target.reshape(-1, 1)
+    oracle_model = RidgeCV(alphas=[0.01, 0.1, 1, 10, 100]).fit(X_train_causal, y_train)
 
+    y_pred_oracle_val    = oracle_model.predict(X_val_causal)
+    y_pred_oracle_target = oracle_model.predict(X_target_causal)
 
-    # Let's do a linear regression to see if everything is okay -- that we can predict the validation phenotype from the causal SNPs
-    X_train_causal = X_train[:, causal_snps]
-    X_val_causal = X_val[:, causal_snps]
+    r2_oracle_val    = r2_score(y_val,    y_pred_oracle_val)
+    r2_oracle_target = r2_score(y_target, y_pred_oracle_target)
 
-    from sklearn.linear_model import LinearRegression
-    model = LinearRegression()
-    model.fit(X_train_causal, y_train)
+    print(f"Oracle R² on val    (within-pop  CEU): {r2_oracle_val:.4f}")
+    print(f"Oracle R² on target (cross-pop   YRI): {r2_oracle_target:.4f}")
+    print()
 
-    from sklearn.metrics import r2_score
-    y_pred_val = model.predict(X_val_causal)
+    # -------------------------------------------------
+    # Baseline: Ridge on all SNPs (gBLUP equivalent)
+    # This is the cross-population baseline XPopVAE needs to beat
+    # -------------------------------------------------
+    print("=" * 60)
+    print("BASELINE / gBLUP (all SNPs)")
+    print("=" * 60)
 
-    r2 = r2_score(y_val, y_pred_val)
-    print("Validation R^2:", r2)
+    baseline_model = RidgeCV(alphas=[0.01, 0.1, 1, 10, 100]).fit(X_train, y_train)
 
-    # Plot a scatterplot of the validation predictions, with the correlation coefficient in the title
-    plt.figure(figsize=(6, 6))
-    plt.scatter(y_val, y_pred_val, alpha=0.5)
-    plt.xlabel("True Validation Phenotype")
-    plt.ylabel("Predicted Validation Phenotype")
-    plt.title(f"Validation R^2: {r2:.3f}")
+    y_pred_baseline_val    = baseline_model.predict(X_val)
+    y_pred_baseline_target = baseline_model.predict(X_target)
+
+    r2_baseline_val    = r2_score(y_val,    y_pred_baseline_val)
+    r2_baseline_target = r2_score(y_target, y_pred_baseline_target)
+
+    print(f"Baseline R² on val    (within-pop CEU): {r2_baseline_val:.4f}")
+    print(f"Baseline R² on target (cross-pop  YRI): {r2_baseline_target:.4f}")
+    print()
+
+    # -------------------------------------------------
+    # summary table
+    # -------------------------------------------------
+    print("=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    print(f"{'Model':<30} {'Val (CEU)':>12} {'Target (YRI)':>14}")
+    print(f"{'-'*30} {'-'*12} {'-'*14}")
+    print(f"{'Oracle (causal SNPs)':<30} {r2_oracle_val:>12.4f} {r2_oracle_target:>14.4f}")
+    print(f"{'Baseline / gBLUP (all SNPs)':<30} {r2_baseline_val:>12.4f} {r2_baseline_target:>14.4f}")
+    print()
+    print("XPopVAE target: beat baseline R² on target (YRI)")
+    print()
+
+    # -------------------------------------------------
+    # scatter plots: oracle and baseline, val and target
+    # -------------------------------------------------
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    panels = [
+        (axes[0, 0], y_val,    y_pred_oracle_val,    r2_oracle_val,    "Oracle — Val (CEU)"),
+        (axes[0, 1], y_target, y_pred_oracle_target, r2_oracle_target, "Oracle — Target (YRI)"),
+        (axes[1, 0], y_val,    y_pred_baseline_val,    r2_baseline_val,    "gBLUP — Val (CEU)"),
+        (axes[1, 1], y_target, y_pred_baseline_target, r2_baseline_target, "gBLUP — Target (YRI)"),
+    ]
+
+    for ax, y_true, y_pred, r2, title in panels:
+        ax.scatter(y_true, y_pred, alpha=0.4, s=10)
+        ax.set_xlabel("True Phenotype")
+        ax.set_ylabel("Predicted Phenotype")
+        ax.set_title(f"{title}\n$R^2$ = {r2:.4f}")
+
     plt.tight_layout()
-    plt.savefig(output_path / "validation_scatter.png")
+    plt.savefig(output_path / "oracle_baseline_scatter.png", dpi=150)
     plt.close()
+    print("Saved scatter plots to oracle_baseline_scatter.png")
 
     # -------------------------------------------------
-    # debugging print statements
-    # -------------------------------------------------
-    print(f"Simulated phenotype with requested {num_causal} causal SNPs and heritability {heritability}")
-    print()
-    print(f"Actual number of causal SNPs used: {len(causal_snps)}")
-    print()
-    print(f"Causal SNP indices: {causal_snps}")
-    print()
-    print(f"Effect sizes: {betas}")
-    print()
-    print(f"Train Phenotype Shape: {y_train.shape}, Val Phenotype Shape: {y_val.shape}")
-    print()
-    print(f"Train Phenotype Mean: {y_train.mean()}, Train Phenotype Std: {y_train.std()}")
-    print(f"Val Phenotype Mean: {y_val.mean()}, Val Phenotype Std: {y_val.std()}")
-    print()
-    print(f"Train Genetic Component Mean: {g_train.mean()}, Train Genetic Component Std: {g_train.std()}")
-    print(f"Val Genetic Component Mean: {g_val.mean()}, Val Genetic Component Std: {g_val.std()}")
-    print()
-    print(f"Train Environmental Noise Mean: {e_train.mean()}, Train Environmental Noise Std: {e_train.std()}")
-    print(f"Val Environmental Noise Mean: {e_val.mean()}, Val Environmental Noise Std: {e_val.std()}")
-    print()
-    print(f"Noise SD used for both TRAIN and VAL: {architecture['noise_sd']}")
-    print()
-
-    # empirical heritability estimates
-    train_h2_empirical = np.var(g_train, ddof=0) / np.var(g_train + e_train, ddof=0)
-    val_h2_empirical = np.var(g_val, ddof=0) / np.var(g_val + e_val, ddof=0)
-
-    print(f"Empirical TRAIN heritability: {train_h2_empirical}")
-    print(f"Empirical VAL heritability: {val_h2_empirical}")
-    print()
-
-    # -------------------------------------------------
-    # histogram
+    # phenotype histograms
     # -------------------------------------------------
     plt.figure(figsize=(10, 6))
-    plt.hist(y_train.ravel(), bins=50, alpha=0.6, label="Train")
-    plt.hist(y_val.ravel(), bins=50, alpha=0.6, label="Val")
+    plt.hist(y_train.ravel(),  bins=50, alpha=0.5, label="Train (CEU)")
+    plt.hist(y_val.ravel(),    bins=50, alpha=0.5, label="Val (CEU)")
+    plt.hist(y_target.ravel(), bins=50, alpha=0.5, label="Target (YRI)")
     plt.title("Histogram of Simulated Phenotype")
     plt.xlabel("Phenotype Value")
     plt.ylabel("Frequency")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(output_path / "simulated_phenotype_histogram.png")
+    plt.savefig(output_path / "simulated_phenotype_histogram.png", dpi=150)
     plt.close()
 
     # -------------------------------------------------
-    # save outputs
+    # debugging print statements
     # -------------------------------------------------
-    np.save(output_path / "simulated_phenotype_train.npy", y_train)
-    np.save(output_path / "simulated_phenotype_val.npy", y_val)
+    print()
+    print(f"Simulated phenotype: {num_causal} causal SNPs, heritability={heritability}")
+    print(f"Actual causal SNPs used: {len(causal_snps)}")
+    print()
+    print(f"Train shape: {y_train.shape}  |  Val shape: {y_val.shape}  |  Target shape: {y_target.shape}")
+    print()
+    print(f"Train  — mean: {y_train.mean():.4f},  std: {y_train.std():.4f}")
+    print(f"Val    — mean: {y_val.mean():.4f},  std: {y_val.std():.4f}")
+    print(f"Target — mean: {y_target.mean():.4f},  std: {y_target.std():.4f}")
+    print()
+
+    train_h2 = np.var(g_train, ddof=0) / np.var(g_train + e_train, ddof=0)
+    val_h2   = np.var(g_val,   ddof=0) / np.var(g_val   + e_val,   ddof=0)
+    print(f"Empirical heritability — Train: {train_h2:.4f},  Val: {val_h2:.4f}")
+    print(f"Noise SD: {architecture['noise_sd']:.6f}")
+    print()
+
+    # -------------------------------------------------
+    # save phenotypes
+    # -------------------------------------------------
+    np.save(output_path / "simulated_phenotype_train.npy",  y_train)
+    np.save(output_path / "simulated_phenotype_val.npy",    y_val)
     np.save(output_path / "simulated_phenotype_target.npy", y_target)
-    np.save(output_path / "causal_snps.npy", causal_snps)
-    np.save(output_path / "effect_sizes.npy", betas)
+    np.save(output_path / "causal_snps.npy",                causal_snps)
+    np.save(output_path / "effect_sizes.npy",               betas)
 
-    # useful extras for debugging/reproducibility
+    # genetic components and noise
     np.save(output_path / "train_genetic_component.npy", g_train)
-    np.save(output_path / "val_genetic_component.npy", g_val)
-    np.save(output_path / "train_noise.npy", e_train)
-    np.save(output_path / "val_noise.npy", e_val)
-    np.save(output_path / "train_standardization_mean.npy", architecture["mean"])
-    np.save(output_path / "train_standardization_std.npy", architecture["std"])
+    np.save(output_path / "val_genetic_component.npy",   g_val)
+    np.save(output_path / "train_noise.npy",             e_train)
+    np.save(output_path / "val_noise.npy",               e_val)
 
-    print(f"Saved outputs to: {output_path.resolve()}")
+    # standardization params
+    np.save(output_path / "train_standardization_mean.npy", architecture["mean"])
+    np.save(output_path / "train_standardization_std.npy",  architecture["std"])
+
+    # oracle predictions
+    np.save(output_path / "pred_oracle_val.npy",    y_pred_oracle_val)
+    np.save(output_path / "pred_oracle_target.npy", y_pred_oracle_target)
+
+    # baseline / gBLUP predictions
+    np.save(output_path / "pred_baseline_val.npy",    y_pred_baseline_val)
+    np.save(output_path / "pred_baseline_target.npy", y_pred_baseline_target)
+
+    print(f"Saved all outputs to: {output_path.resolve()}")
 
 
 if __name__ == "__main__":

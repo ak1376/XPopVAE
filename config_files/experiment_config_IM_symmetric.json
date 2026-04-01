@@ -1,5 +1,5 @@
 {
-  "genome_length": 1e7,
+  "genome_length": 5e7,
   "mutation_rate": 1.29e-8,
   "recombination_rate": 1.2e-8,
   "demographic_model": "IM_symmetric",
@@ -12,26 +12,12 @@
   "num_draws": 1,
   "num_replicates": 1,
   "priors": {
-    "N_anc": [
-      100,
-      30000
-    ],
-    "N_YRI": [
-      100,
-      30000
-    ],
-    "N_CEU": [
-      100,
-      30000
-    ],
-    "m": [
-      1e-8,
-      1e-4
-    ],
-    "T_split": [
-      500,
-      20000
-    ]
+      "N_YRI":             [100, 30000],
+      "N_CEU":             [100, 30000],
+      "N_CEU_bottleneck":  [100, 5000],
+      "m":                 [1e-8, 1e-4],
+      "T_split":           [500, 20000],
+      "T_bottleneck":      [10, 2000]
   },
 
   "parameter_order": [
@@ -42,7 +28,7 @@
     "T_split"
   ], 
     "num_causal_variants": 100, 
-    "heritability": 0.7,
+    "heritability": 1.0,
     "trait_distribution": "normal",
     "trait_distribution_parameters": {
         "mean": 0,

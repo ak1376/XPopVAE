@@ -7,7 +7,13 @@ Baselines:
 1. Linear Regression
 2. Ridge Regression
 3. Lasso             — via LassoLarsCV (LARS path, much faster than coord descent for wide data)
-4. gBLUP
+4. gBLUP             — VanRaden GRM with CV-selected lambda (always, regardless of h2)
+
+Note on gBLUP lambda:
+    The analytic formula lambda = (1 - h2) / h2 is only valid under specific
+    normalization assumptions (GRM diagonal = 1, phenotype variance = 1).
+    In practice these don't hold exactly, so we always CV-select lambda using
+    the validation set. h2 is used only to center the lambda search range.
 
 Usage
 -----
@@ -18,15 +24,15 @@ python baseline_predictors.py \
     --y_val   /sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy   \
     --x_test  /sietch_colab/akapoor/XPopVAE/experiments/IM_symmetric/processed_data/0/rep0/target.npy  \
     --y_test  /sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy \
-    --out_dir results/baselines    \
-    --h2      0.7
+    --out_dir results/baselines \
+    --h2      1.0
 """
 
 import argparse
 from pathlib import Path
 
 import numpy as np
-from sklearn.linear_model import LassoLarsCV, LinearRegression, Ridge
+from sklearn.linear_model import LassoLarsCV, LassoLars, LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
@@ -51,35 +57,61 @@ def build_cross_grm(X_new, X_train, p):
 
 
 class GBLUPPredictor:
-    def __init__(self, h2=None):
+    """
+    gBLUP with CV-selected lambda.
+
+    Lambda is always selected by searching over a grid evaluated on the
+    validation set. h2 is used only to center the search range — it is
+    never used to directly compute lambda, because the analytic formula
+    lambda = (1-h2)/h2 requires specific normalizations that don't hold
+    in practice (e.g. it breaks down at h2=1.0, giving lambda=0 and a
+    singular system).
+    """
+
+    def __init__(self, h2=1.0):
         self.h2 = h2
-        self.lambda_ = self.alpha_ = self.mu_ = self.p_ = self.X_train_ = None
+        self.lambda_ = None
+        self.alpha_  = None
+        self.mu_     = None
+        self.p_      = None
+        self.X_train_ = None
 
     def _solve(self, G, y_c, lam):
         return np.linalg.solve(G + lam * np.eye(len(G)), y_c)
 
-    def fit(self, X_train, y_train, X_val=None, y_val=None, lambdas=None):
-        self.mu_      = y_train.mean()
-        self.p_       = X_train.mean(axis=0) / 2.0
-        self.X_train_ = X_train.copy()
+    def _make_lambda_grid(self, n=60):
+        """
+        Build a lambda search grid centered around the analytic estimate,
+        but bounded away from zero to avoid singular matrices.
+        The analytic estimate is used only as a heuristic center point.
+        """
+        analytic = (1.0 - self.h2) / max(self.h2, 1e-6)  # heuristic center
+        log_center = np.log10(max(analytic, 1e-4))
+        return np.logspace(log_center - 3, log_center + 3, n)
+
+    def fit(self, X_train, y_train, X_val, y_val):
+        self.mu_       = y_train.mean()
+        self.p_        = X_train.mean(axis=0) / 2.0
+        self.X_train_  = X_train.copy()
+
         G   = build_grm(X_train)
         y_c = y_train - self.mu_
 
-        if self.h2 is not None:
-            self.lambda_ = (1.0 - self.h2) / self.h2
-        else:
-            if X_val is None or y_val is None:
-                raise ValueError("Provide X_val/y_val when h2 is None.")
-            lambdas = lambdas if lambdas is not None else np.logspace(-3, 3, 50)
-            G_cv    = build_cross_grm(X_val, X_train, self.p_)
-            best_r2, best_lam = -np.inf, lambdas[0]
-            for lam in lambdas:
-                r2 = r2_score(y_val, self.mu_ + G_cv @ self._solve(G, y_c, lam))
-                if r2 > best_r2:
-                    best_r2, best_lam = r2, lam
-            self.lambda_ = best_lam
+        G_cv = build_cross_grm(X_val, X_train, self.p_)
 
-        self.alpha_ = self._solve(G, y_c, self.lambda_)
+        lambdas = self._make_lambda_grid()
+        best_r2, best_lam = -np.inf, lambdas[0]
+        for lam in lambdas:
+            y_pred_cv = self.mu_ + G_cv @ self._solve(G, y_c, lam)
+            r2 = r2_score(y_val, y_pred_cv)
+            if r2 > best_r2:
+                best_r2, best_lam = r2, lam
+
+        self.lambda_ = best_lam
+        self.alpha_  = self._solve(G, y_c, self.lambda_)
+
+        print(f"  gBLUP CV: best lambda={self.lambda_:.4g}, val R²={best_r2:.4f}  "
+              f"(searched {len(lambdas)} values, h2={self.h2})")
         return self
 
     def predict(self, X_new):
@@ -100,20 +132,21 @@ def evaluate(y_true, y_pred):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--x_train",     required=True)
-    p.add_argument("--y_train",     required=True)
-    p.add_argument("--x_val",       required=True)
-    p.add_argument("--y_val",       required=True)
-    p.add_argument("--x_test",      required=True)
-    p.add_argument("--y_test",      required=True)
-    p.add_argument("--out_dir",     default="results/baselines")
-    p.add_argument("--h2",          type=float, default=0.7)
-    p.add_argument("--seed",        type=int,   default=42)
-    p.add_argument("--standardize", action="store_true")
-    p.add_argument("--n_jobs",      type=int,   default=-1,
+    p.add_argument("--x_train",      required=True)
+    p.add_argument("--y_train",      required=True)
+    p.add_argument("--x_val",        required=True)
+    p.add_argument("--y_val",        required=True)
+    p.add_argument("--x_test",       required=True)
+    p.add_argument("--y_test",       required=True)
+    p.add_argument("--out_dir",      default="results/baselines")
+    p.add_argument("--h2",           type=float, default=1.0,
+                   help="True heritability (used to center gBLUP lambda search range)")
+    p.add_argument("--seed",         type=int,   default=42)
+    p.add_argument("--standardize",  action="store_true")
+    p.add_argument("--n_jobs",       type=int,   default=-1,
                    help="Parallel jobs for LassoLarsCV (-1 = all cores)")
-    p.add_argument("--max_n_alphas",type=int,   default=100,
-                   help="Max alphas on the LARS path (default 100; lower = faster)")
+    p.add_argument("--max_n_alphas", type=int,   default=100,
+                   help="Max alphas on the LARS path")
     return p.parse_args()
 
 
@@ -141,7 +174,7 @@ def main():
         X_test  = scaler.transform(X_test)
         print("  SNPs standardized.")
 
-    # Train+val for CV-based methods
+    # train+val combined for Lasso CV
     X_tv = np.concatenate([X_train, X_val])
     y_tv = np.concatenate([y_train, y_val])
 
@@ -201,21 +234,6 @@ def main():
 
     # -------------------------------------------------------------------------
     # 3. Lasso via LassoLarsCV
-    #
-    # WHY LARS INSTEAD OF COORDINATE DESCENT?
-    # ----------------------------------------
-    # Coordinate descent (sklearn's Lasso) iterates over all M=9208 SNPs
-    # repeatedly until convergence, for each alpha on the grid.
-    #
-    # LARS (Least Angle Regression) builds the ENTIRE regularization path
-    # in one shot by stepping through variables one at a time. For sparse
-    # solutions (only 100 causal SNPs), the path terminates after ~100 steps
-    # rather than sweeping the full grid. This is O(N * k^2) where k is the
-    # number of selected variables, vs O(N * M * n_alphas) for coord descent.
-    #
-    # LassoLarsCV runs this fast path inside CV folds.
-    # max_n_alphas caps the path length (100 is fine given 100 causal SNPs).
-    # n_jobs parallelises the CV folds.
     # -------------------------------------------------------------------------
     log("Fitting Lasso via LassoLarsCV...")
     llcv = LassoLarsCV(
@@ -224,26 +242,24 @@ def main():
         n_jobs       = args.n_jobs,
     ).fit(X_tv, y_tv)
 
-    # Refit on train only with CV-chosen alpha for fair val evaluation
-    from sklearn.linear_model import LassoLars
+    # refit on train only with CV-chosen alpha for fair val evaluation
     lasso = LassoLars(alpha=llcv.alpha_).fit(X_train, y_train)
-
-    n_nz = int(np.sum(lasso.coef_ != 0))
+    n_nz  = int(np.sum(lasso.coef_ != 0))
     report("Lasso (LassoLarsCV)",
            evaluate(y_val,  lasso.predict(X_val)),
            evaluate(y_test, lasso.predict(X_test)),
            extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}")
 
     # -------------------------------------------------------------------------
-    # 4. gBLUP
+    # 4. gBLUP — lambda always CV-selected, h2 only centers the search range
     # -------------------------------------------------------------------------
-    log("Fitting gBLUP...")
-    gblup = GBLUPPredictor(h2=args.h2 if args.h2 > 0 else None)
+    log("Fitting gBLUP (CV lambda)...")
+    gblup = GBLUPPredictor(h2=args.h2)
     gblup.fit(X_train, y_train, X_val=X_val, y_val=y_val)
     report("gBLUP",
            evaluate(y_val,  gblup.predict(X_val)),
            evaluate(y_test, gblup.predict(X_test)),
-           extra=f"lambda={gblup.lambda_:.4g}  (h2={args.h2})")
+           extra=f"CV lambda={gblup.lambda_:.4g}  (h2={args.h2})")
 
     # -------------------------------------------------------------------------
     # Summary
