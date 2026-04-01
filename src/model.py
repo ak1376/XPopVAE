@@ -13,7 +13,6 @@ class ConvVAE(nn.Module):
         padding,
         latent_dim,
         num_classes=3,
-        num_domains=2,
         use_batchnorm=False,
         activation="elu",
         pheno_dim=1,
@@ -29,7 +28,6 @@ class ConvVAE(nn.Module):
         self.padding = padding
         self.latent_dim = latent_dim
         self.num_classes = num_classes
-        self.num_domains = num_domains
         self.use_batchnorm = use_batchnorm
         self.activation = activation
         self.encoder_lengths = [input_length]
@@ -82,11 +80,6 @@ class ConvVAE(nn.Module):
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
-
-        # domain head: predict population membership from mu
-        # outputs raw logits for num_domains classes (CEU=0, YRI=1)
-        # GRL is applied externally in train.py before this head is called
-        self.domain_head = nn.Linear(latent_dim, num_domains)
 
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
@@ -174,12 +167,7 @@ class ConvVAE(nn.Module):
 
         z = self.reparameterize(mu, logvar)
 
-        # phenotype prediction from mu (no GRL — pheno head is not adversarial)
         pheno_pred = self.pheno_head(mu)
-
-        # domain logits returned from mu directly — GRL applied externally
-        # in train.py before passing mu to domain_head during training
-        domain_logits = self.domain_head(mu)
 
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
@@ -198,4 +186,4 @@ class ConvVAE(nn.Module):
                 f"Decoder output shape {out.shape} does not match expected logits shape {expected_shape}"
             )
 
-        return out, mu, logvar, z, pheno_pred, domain_logits
+        return out, mu, logvar, z, pheno_pred

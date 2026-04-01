@@ -22,7 +22,7 @@ training:
   compute_clean_metrics_train: true
   compute_clean_metrics_val: true
   patience: 40
-  lambda_grl: 0.01
+  pretrain_epochs: 100
 
 masking:
   enabled: false

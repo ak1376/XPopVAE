@@ -69,7 +69,7 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
             batch, use_masked_input=use_masked_input
         )
         x_input = x_input.to(device)
-        _, _, _, _, pheno_pred, _ = model(x_input)
+        _, _, _, _, pheno_pred = model(x_input)
 
         all_true.append(_to_numpy(pheno))
         all_pred.append(_to_numpy(pheno_pred))
@@ -229,7 +229,7 @@ def plot_reconstruction(
         x_input = x_input.to(device)
         x_true = x_true.to(device)
 
-        logits, mu, logvar, z, pheno_pred, _ = model(x_input)
+        logits, mu, logvar, z, pheno_pred = model(x_input)
 
         y_true = x_true.long().squeeze(1).cpu().numpy()
         y_pred = torch.argmax(logits, dim=1).cpu().numpy()
@@ -322,7 +322,7 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
             batch, use_masked_input=use_masked_input
         )
         x_input = x_input.to(device)
-        _, mu, _, _, _, _ = model(x_input)
+        _, mu, _, _, _ = model(x_input)
 
         all_mu.append(mu.cpu())
         all_labels.append(pop_label.cpu())
