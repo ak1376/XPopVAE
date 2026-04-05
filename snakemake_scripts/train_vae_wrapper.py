@@ -142,6 +142,8 @@ def main(
 
     pheno_hidden_dim = vae_config["phenotype"].get("pheno_hidden_dim", None)
     gamma = float(vae_config["phenotype"].get("gamma", 1.0))
+    pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
+
 
     # ------------------------------------------------------------------
     # masker
@@ -285,7 +287,14 @@ def main(
     print("z shape:",         z.shape)
     print("pheno_pred shape:", pheno_pred.shape)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    # optimizer with optional per-module weight decay
+    pheno_head_params = set(model.pheno_head.parameters())
+    other_params = [p for p in model.parameters() if p not in pheno_head_params]
+
+    optimizer = torch.optim.Adam([
+        {"params": other_params,            "weight_decay": 0.0},
+        {"params": list(pheno_head_params), "weight_decay": pheno_weight_decay},
+    ], lr=learning_rate)
 
     # ------------------------------------------------------------------
     # training state

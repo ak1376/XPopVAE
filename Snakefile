@@ -524,6 +524,8 @@ rule diagnose_allelefreq_vs_ld:
         """
 
 rule write_vae_config:
+    input:
+        source_config=VAE_YAML_PATH
     output:
         config=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
     run:
