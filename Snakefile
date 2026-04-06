@@ -391,17 +391,22 @@ rule train_vae:
         vae_yaml=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
         training_data=DISCOVERY_TRAIN,
         validation_data=DISCOVERY_VAL,
-
-        # THE BELOW PHENOTYPES ARE HARDCODED TO USE THE SANITY CHECK ONES. 
-        training_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
-        validation_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
-        target_pheno = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
+        training_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
+        validation_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
+        target_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
         target_data=TARGET,
         script=TRAIN_VAE_SCRIPT,
     output:
         best_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         final_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
         history=VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
+        # Snapshot of training inputs
+        training_data=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
+        validation_data=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_val.npy",
+        target_data=VAE_BASEDIR / "{exp_id}/training_inputs/target.npy",
+        training_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_train.npy",
+        validation_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_val.npy",
+        target_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_target.npy",
     params:
         outdir=lambda wc: VAE_BASEDIR / wc.exp_id,
     shell:
@@ -415,6 +420,14 @@ rule train_vae:
             --validation-pheno {input.validation_pheno} \
             --target-pheno {input.target_pheno} \
             --outputs {params.outdir}
+
+        mkdir -p {params.outdir}/training_inputs
+        cp {input.training_data}    {output.training_data}
+        cp {input.validation_data}  {output.validation_data}
+        cp {input.target_data}      {output.target_data}
+        cp {input.training_pheno}   {output.training_pheno}
+        cp {input.validation_pheno} {output.validation_pheno}
+        cp {input.target_pheno}     {output.target_pheno}
         """
 
 rule compare_ld_decay_discovery:
