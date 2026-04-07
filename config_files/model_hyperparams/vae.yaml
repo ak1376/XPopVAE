@@ -45,7 +45,7 @@ phenotype:
 seed: 0
 
 grid:
-  enabled: true
+  enabled: false
   name:
     prefix: "vae_gamma"
     sep: "__"

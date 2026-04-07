@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# snakemake_scripts/run_build_genotypes.py
 from __future__ import annotations
 
 import argparse
@@ -8,7 +9,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
 
 from src.build_genotypes import BuildGenotypesArgs, build_genotypes_for_vae
 
@@ -21,66 +21,59 @@ python -u snakemake_scripts/run_build_genotypes.py \
   --maf-threshold 0.05 \
   --subset-mode random \
   --subset-seed 0 \
-  --val-frac 0.2 \
+  --disc-train-frac 0.8 \
+  --target-held-out-frac 0.8 \
   --split-seed 0 \
   --subset-snps 5000
 '''
 
 
-def _str2bool(x: str) -> bool:
-    if isinstance(x, bool):
-        return x
-    s = str(x).strip().lower()
-    if s in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if s in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Expected a boolean, got: {x!r}")
-
-
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Snakemake wrapper: build genotype arrays + discovery train/val + target split (optional normalization)."
+        description=(
+            "Snakemake wrapper: build genotype arrays with the following split:\n"
+            "  discovery pop -> disc_train_frac (train) / 1-disc_train_frac (validation)\n"
+            "  target pop    -> 1-target_held_out_frac (train) / target_held_out_frac (held-out)"
+        )
     )
 
-    ap.add_argument("--tree", type=Path, required=True)
+    ap.add_argument("--tree",      type=Path, required=True)
     ap.add_argument("--phenotype", type=Path, required=True)
-    ap.add_argument("--outdir", type=Path, required=True)
+    ap.add_argument("--outdir",    type=Path, required=True)
 
-    # Optional YAML config (maf_threshold under data.maf_threshold)
     ap.add_argument(
-        "--config",
-        type=Path,
-        default=None,
+        "--config", type=Path, default=None,
         help="Optional YAML config with maf_threshold under data.maf_threshold",
     )
     ap.add_argument("--maf-threshold", type=float, default=None)
-
-    # NEW: experiment config JSON (reads top-level key: discovery)
     ap.add_argument(
-        "--experiment-config-json",
-        type=Path,
-        default=None,
-        help="Optional experiment config JSON; reads top-level key 'discovery' unless --discovery-pop is provided.",
+        "--experiment-config-json", type=Path, default=None,
+        help="Optional experiment config JSON; reads top-level key 'discovery'.",
     )
 
     # subsetting
-    ap.add_argument("--subset-snps", type=int, default=5000)
-    ap.add_argument("--subset-bp", type=float, default=None)
-    ap.add_argument("--subset-mode", type=str, default="first", choices=["first", "middle", "random"])
-    ap.add_argument("--subset-seed", type=int, default=0)
+    ap.add_argument("--subset-snps", type=int,   default=5000)
+    ap.add_argument("--subset-bp",   type=float, default=None)
+    ap.add_argument("--subset-mode", type=str,   default="first",
+                    choices=["first", "middle", "random"])
+    ap.add_argument("--subset-seed", type=int,   default=0)
 
-    # split (discovery -> train/val; target = non-discovery)
-    ap.add_argument("--val-frac", type=float, default=0.2)
+    # split fractions
+    ap.add_argument(
+        "--disc-train-frac", type=float, default=0.8,
+        help="Fraction of discovery pop used for training (rest -> validation). Default 0.8.",
+    )
+    ap.add_argument(
+        "--target-held-out-frac", type=float, default=0.8,
+        help="Fraction of target pop held out for final evaluation (rest -> training). Default 0.8.",
+    )
     ap.add_argument("--split-seed", type=int, default=0)
     ap.add_argument(
-        "--discovery-pop",
-        type=str,
-        default=None,
-        help="Override discovery population label. If omitted, read from --experiment-config-json; else default CEU.",
+        "--discovery-pop", type=str, default=None,
+        help="Override discovery population label. Falls back to experiment JSON then 'CEU'.",
     )
 
-    ap.add_argument("--norm-eps", type=float, default=1e-6)
+    ap.add_argument("--norm-eps",          type=float, default=1e-6)
     ap.add_argument("--norm-clip-std-min", type=float, default=1e-3)
 
     return ap.parse_args()
@@ -100,7 +93,8 @@ def main() -> None:
         subset_bp=args.subset_bp,
         subset_mode=str(args.subset_mode),
         subset_seed=int(args.subset_seed),
-        val_frac=float(args.val_frac),
+        disc_train_frac=float(args.disc_train_frac),
+        target_held_out_frac=float(args.target_held_out_frac),
         split_seed=int(args.split_seed),
         discovery_pop=args.discovery_pop,
         norm_eps=float(args.norm_eps),

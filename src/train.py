@@ -34,7 +34,11 @@ def train_one_epoch(model, dataloader, optimizer, device, loss_fn, masker, alpha
         recon_unmasked = recon_unmasked_loss(logits, targets, mask)
         recon_masked = recon_masked_loss(logits, targets, mask)
         kl = kl_loss(mu, logvar)
-        pheno_loss = phenotype_loss(pheno_pred, pheno)
+        ceu_mask = (pop_label == 0)
+        if ceu_mask.any():
+            pheno_loss = phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
+        else:
+            pheno_loss = torch.tensor(0.0, device=device, requires_grad=False)
 
         loss, recon_unmasked_val, recon_masked_val, kl_val, pheno_val = loss_fn(
             recon_unmasked=recon_unmasked,

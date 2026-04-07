@@ -12,11 +12,22 @@ from torch.utils.data import DataLoader, TensorDataset
 
 """
 Inputs:
-    --vae-config: YAML config for the VAE (model + training hyperparameters)
-    --training-data: discovery train dataset (numpy array)
-    --validation-data: discovery val dataset (numpy array)
-    --target-data: target dataset (numpy array)
-    --outputs: directory to save outputs (model checkpoints, loss curves, latent space plots, etc.)
+    --vae-config                : YAML config for the VAE
+    --training-data             : stacked CEU+YRI genotypes  (training.npy)
+    --disc-train-data           : CEU-only training genotypes (discovery_train.npy)  [eval only]
+    --target-train-data         : YRI-only training genotypes (target_train.npy)     [eval only]
+    --validation-data           : CEU validation genotypes   (discovery_validation.npy)
+    --disc-train-pheno          : CEU training phenotypes    (simulated_phenotype_disc_train.npy)
+    --target-train-pheno        : YRI training phenotypes    (simulated_phenotype_target_train.npy)
+    --validation-pheno          : CEU validation phenotypes  (simulated_phenotype_disc_val.npy)
+    --outputs                   : root output directory
+
+Training loader  : training.npy  (CEU + YRI mixed, shuffled)
+                   phenotype loss masked to CEU rows only (pop_label == 0)
+Evaluation loaders (plots + metrics only, no gradient updates):
+    discovery_train/  <- discovery_train.npy
+    target_train/     <- target_train.npy
+    discovery_validation/ <- discovery_validation.npy
 """
 
 # ------------------------------------------------------------------
@@ -42,66 +53,174 @@ from src.plotting import (
 from src.train import evaluate, train_one_epoch
 
 
+# =============================================================================
+# Helpers
+# =============================================================================
+
 def extract_mu(model, dataloader, device, use_masked_input=False):
     model.eval()
-    mu_all = []
-    labels_all = []
-
+    mu_all, labels_all = [], []
     with torch.no_grad():
         for batch in dataloader:
             if len(batch) == 3:
-                # train loader: (x, pheno, pop_label)
                 x = batch[0]
                 pop_label = batch[-1]
             elif len(batch) == 5:
-                # val/target loader: (input_x, original_x, pheno, mask, pop_label)
                 x = batch[0] if use_masked_input else batch[1]
                 pop_label = batch[-1]
             else:
-                raise ValueError(f"Unexpected batch structure of length {len(batch)}")
-
+                raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
             _, mu, _, _, _ = model(x)
             mu_all.append(mu.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
-
     return np.concatenate(mu_all, axis=0), np.concatenate(labels_all, axis=0)
 
 
-def load_vae_config(vae_config_path: Path) -> dict:
-    with open(vae_config_path, "r") as f:
-        vae_config = yaml.safe_load(f)
-    return vae_config
+def load_vae_config(path: Path) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
 
 
-def save_checkpoint(
-    path: Path,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    epoch: int,
-    val_loss: float,
-    vae_config: dict,
-    input_length: int,
+def save_checkpoint(path, model, optimizer, epoch, val_loss, vae_config, input_length):
+    torch.save(
+        {
+            "epoch": epoch,
+            "val_loss": val_loss,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "vae_config": vae_config,
+            "input_length": input_length,
+        },
+        path,
+    )
+
+
+def make_eval_loader(
+    geno: np.ndarray,
+    pheno_norm: np.ndarray,
+    pop_label_value: int,
+    batch_size: int,
+    masker,
+    masking: bool,
+    out_dir: Path,
+    split_name: str,
 ):
-    checkpoint = {
-        "epoch": epoch,
-        "val_loss": val_loss,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "vae_config": vae_config,
-        "input_length": input_length,
-    }
-    torch.save(checkpoint, path)
+    """
+    Build a val-style TensorDataset/DataLoader for one evaluation split.
+    Tuple order: (input_x, original_x, pheno, mask, pop_label)
+    """
+    geno_t  = torch.tensor(geno,       dtype=torch.float32).unsqueeze(1)
+    pheno_t = torch.tensor(pheno_norm, dtype=torch.float32).unsqueeze(1)
 
+    if masking:
+        input_x, mask = masker.mask(geno_t)
+        np.save(out_dir / f"masked_{split_name}.npy", input_x.numpy())
+        np.save(out_dir / f"mask_{split_name}.npy",   mask.numpy())
+    else:
+        input_x = geno_t
+        mask    = torch.zeros(geno_t.shape[0], geno_t.shape[2], dtype=torch.bool)
+
+    pop_labels = torch.full((len(geno_t),), pop_label_value, dtype=torch.long)
+
+    ds     = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
+    return loader
+
+
+def run_eval_plots(
+    model,
+    loader,
+    device,
+    out_dir: Path,
+    split_name: str,
+    use_masked: bool,
+    loss_fn,
+    alpha: float,
+    beta: float,
+    gamma: float,
+):
+    """
+    Run a full evaluation pass for one split and save all plots + metrics
+    into out_dir/split_name/.
+    """
+    split_dir = out_dir / split_name
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    loss, recon_unmasked, recon_masked, kl, pheno_loss = evaluate(
+        model=model,
+        dataloader=loader,
+        device=device,
+        loss_fn=loss_fn,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+    )
+    print(f"\n[{split_name}] loss={loss:.6f}  recon={recon_unmasked:.6f}  "
+          f"kl={kl:.6f}  pheno_loss={pheno_loss:.6f}")
+
+    recon_metrics = plot_reconstruction(
+        model=model,
+        dataloader=loader,
+        device=device,
+        output_dir=split_dir,
+        use_masked_input=use_masked,
+    )
+    print(f"[{split_name}] balanced_accuracy={recon_metrics['balanced_accuracy']:.6f}")
+
+    plot_latent_space(
+        model=model,
+        dataloader=loader,
+        device=device,
+        output_dir=split_dir,
+        save_path="latent_space.png",
+        use_masked_input=use_masked,
+    )
+
+    pheno_metrics = plot_pheno_predictions(
+        model=model,
+        dataloader=loader,
+        device=device,
+        output_path=split_dir / f"pheno_pred_vs_true_{split_name}.png",
+        use_masked_input=use_masked,
+        title=f"{split_name} phenotype prediction",
+    )
+    print(f"[{split_name}] pheno RMSE={pheno_metrics['rmse']:.6f}  R²={pheno_metrics['r2']:.6f}")
+
+    plot_pheno_predictions_by_population(
+        model=model,
+        dataloader=loader,
+        device=device,
+        output_path=split_dir / f"pheno_pred_vs_true_{split_name}_by_pop.png",
+        use_masked_input=use_masked,
+        title=f"{split_name} phenotype prediction by population",
+    )
+
+    plot_pheno_residuals(
+        model=model,
+        dataloader=loader,
+        device=device,
+        output_path=split_dir / f"pheno_residuals_{split_name}.png",
+        use_masked_input=use_masked,
+        title=f"{split_name} phenotype residuals",
+    )
+
+    return recon_metrics, pheno_metrics
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 def main(
     vae_config_path: Path,
-    training_data_path: Path,
-    validation_data_path: Path,
-    target_data_path: Path,
-    training_pheno_path: Path,
-    validation_pheno_path: Path,
-    target_pheno_path: Path,
+    training_data_path: Path,       # training.npy  (CEU + YRI stacked)
+    disc_train_data_path: Path,     # discovery_train.npy  (eval only)
+    target_train_data_path: Path,   # target_train.npy     (eval only)
+    validation_data_path: Path,     # discovery_validation.npy
+    disc_train_pheno_path: Path,    # simulated_phenotype_disc_train.npy
+    target_train_pheno_path: Path,  # simulated_phenotype_target_train.npy
+    validation_pheno_path: Path,    # simulated_phenotype_disc_val.npy
     output_dir: Path,
 ):
     vae_config = load_vae_config(vae_config_path)
@@ -109,105 +228,146 @@ def main(
     # ------------------------------------------------------------------
     # output directories
     # ------------------------------------------------------------------
-    out = output_dir / "vae_outputs"
-    out.mkdir(parents=True, exist_ok=True)
-
+    out            = output_dir / "vae_outputs"
     checkpoint_dir = out / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir      = out / "plots"
+    for d in (out, checkpoint_dir, plots_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
     print(f"Saving outputs to: {out.resolve()}")
 
     # ------------------------------------------------------------------
     # hyperparameters
     # ------------------------------------------------------------------
-    in_channels = 1
-    hidden_channels = vae_config["model"]["hidden_channels"]
-    kernel_size = int(vae_config["model"]["kernel_size"])
-    stride = int(vae_config["model"]["stride"])
-    padding = int(vae_config["model"]["padding"])
-    latent_dim = int(vae_config["model"]["latent_dim"])
+    in_channels      = 1
+    hidden_channels  = vae_config["model"]["hidden_channels"]
+    kernel_size      = int(vae_config["model"]["kernel_size"])
+    stride           = int(vae_config["model"]["stride"])
+    padding          = int(vae_config["model"]["padding"])
+    latent_dim       = int(vae_config["model"]["latent_dim"])
 
-    beta = float(vae_config["training"]["beta"])
-    learning_rate = float(vae_config["training"]["lr"])
-    batch_size = int(vae_config["training"]["batch_size"])
-    num_epochs = int(vae_config["training"]["max_epochs"])
-    patience = int(vae_config["training"].get("patience", 500))
-    min_delta = float(vae_config["training"].get("min_delta", 1e-4))
+    beta             = float(vae_config["training"]["beta"])
+    learning_rate    = float(vae_config["training"]["lr"])
+    batch_size       = int(vae_config["training"]["batch_size"])
+    num_epochs       = int(vae_config["training"]["max_epochs"])
+    patience         = int(vae_config["training"].get("patience", 500))
+    min_delta        = float(vae_config["training"].get("min_delta", 1e-4))
 
-    masking = vae_config["masking"].get("enabled", False)
-    print(f"Masking enabled: {masking}")
-    alpha = float(vae_config["masking"]["alpha_masked"])
-    block_length = int(vae_config["masking"]["block_len"])
-    mask_frac = float(vae_config["masking"]["mask_frac"])
+    masking          = vae_config["masking"].get("enabled", False)
+    alpha            = float(vae_config["masking"]["alpha_masked"])
+    block_length     = int(vae_config["masking"]["block_len"])
+    mask_frac        = float(vae_config["masking"]["mask_frac"])
 
-    pheno_hidden_dim = vae_config["phenotype"].get("pheno_hidden_dim", None)
-    gamma = float(vae_config["phenotype"].get("gamma", 1.0))
+    pheno_hidden_dim  = vae_config["phenotype"].get("pheno_hidden_dim", None)
+    gamma             = float(vae_config["phenotype"].get("gamma", 1.0))
     pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
 
+    print(f"Masking enabled: {masking}")
+
+    # ------------------------------------------------------------------
+    # load genotypes
+    # ------------------------------------------------------------------
+    training_dataset   = np.load(training_data_path)    # CEU + YRI stacked
+    disc_train_dataset = np.load(disc_train_data_path)  # CEU only  (eval)
+    target_train_dataset = np.load(target_train_data_path)  # YRI only (eval)
+    validation_dataset = np.load(validation_data_path)  # CEU val
+
+    n_disc_train   = disc_train_dataset.shape[0]
+    n_target_train = target_train_dataset.shape[0]
+    assert n_disc_train + n_target_train == training_dataset.shape[0], (
+        f"training.npy rows ({training_dataset.shape[0]}) != "
+        f"discovery_train ({n_disc_train}) + target_train ({n_target_train})"
+    )
+
+    input_length = training_dataset.shape[-1]
+
+    # ------------------------------------------------------------------
+    # load + normalise phenotypes
+    # Standardise using CEU discovery_train mean/std ONLY
+    # ------------------------------------------------------------------
+    disc_train_pheno   = np.load(disc_train_pheno_path).astype(np.float32)
+    target_train_pheno = np.load(target_train_pheno_path).astype(np.float32)
+    validation_pheno   = np.load(validation_pheno_path).astype(np.float32)
+
+    train_mean = disc_train_pheno.mean()
+    train_std  = disc_train_pheno.std()
+    print(f"Phenotype normalisation — mean={train_mean:.4f}  std={train_std:.4f}  (CEU disc_train only)")
+
+    disc_train_pheno_norm   = (disc_train_pheno   - train_mean) / train_std
+    target_train_pheno_norm = (target_train_pheno - train_mean) / train_std
+    validation_pheno_norm   = (validation_pheno   - train_mean) / train_std
+
+    # stacked training pheno: CEU rows real, YRI rows zeroed (masked in loss via pop_label)
+    training_pheno_norm = np.concatenate(
+        [disc_train_pheno_norm, np.zeros(n_target_train, dtype=np.float32)], axis=0
+    )
 
     # ------------------------------------------------------------------
     # masker
     # ------------------------------------------------------------------
-    if masking:
-        masker = Masker(block_length=block_length, mask_fraction=mask_frac)
-    else:
-        masker = None
-        print("Masking is disabled. The model will be trained without masked reconstruction loss.")
+    masker = Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
 
     # ------------------------------------------------------------------
-    # load datasets
+    # build TRAINING tensors + loader
+    # pop_label: 0 = CEU (phenotype loss active), 1 = YRI (phenotype loss masked)
+    # Tuple order: (x, pheno, pop_label)
     # ------------------------------------------------------------------
-    training_dataset   = np.load(training_data_path)
-    validation_dataset = np.load(validation_data_path)
-    target_dataset     = np.load(target_data_path)
+    training_geno_t  = torch.tensor(training_dataset,       dtype=torch.float32).unsqueeze(1)
+    training_pheno_t = torch.tensor(training_pheno_norm,    dtype=torch.float32).unsqueeze(1)
+    training_pop_t   = torch.cat([
+        torch.zeros(n_disc_train,   dtype=torch.long),
+        torch.ones(n_target_train,  dtype=torch.long),
+    ])
 
-    training_pheno   = np.load(training_pheno_path)
-    validation_pheno = np.load(validation_pheno_path)
-    target_pheno     = np.load(target_pheno_path)
-
-    train_mean = training_pheno.mean()
-    train_std  = training_pheno.std()
-
-    training_pheno   = (training_pheno   - train_mean) / train_std
-    validation_pheno = (validation_pheno - train_mean) / train_std
-    target_pheno     = (target_pheno     - train_mean) / train_std
-
-    input_length = training_dataset.shape[-1]
-
-    training_dataset_torch   = torch.tensor(training_dataset,   dtype=torch.float32).unsqueeze(1)
-    validation_dataset_torch = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
-    target_dataset_torch     = torch.tensor(target_dataset,     dtype=torch.float32).unsqueeze(1)
-
-    training_pheno_torch   = torch.tensor(training_pheno,   dtype=torch.float32).unsqueeze(1)
-    validation_pheno_torch = torch.tensor(validation_pheno, dtype=torch.float32).unsqueeze(1)
-    target_pheno_torch     = torch.tensor(target_pheno,     dtype=torch.float32).unsqueeze(1)
+    train_ds     = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     # ------------------------------------------------------------------
-    # prepare val / target inputs
-    # when masking is off, val_input == original and masks are all-zero
+    # build EVALUATION loaders (no gradient updates, plots only)
+    # Tuple order: (input_x, original_x, pheno, mask, pop_label)
     # ------------------------------------------------------------------
-    if masking:
-        val_input_x,    val_mask    = masker.mask(validation_dataset_torch)
-        target_input_x, target_mask = masker.mask(target_dataset_torch)
+    disc_train_loader = make_eval_loader(
+        geno=disc_train_dataset,
+        pheno_norm=disc_train_pheno_norm,
+        pop_label_value=0,
+        batch_size=batch_size,
+        masker=masker,
+        masking=masking,
+        out_dir=out,
+        split_name="discovery_train",
+    )
 
-        np.save(out / "masked_validation_dataset.npy", val_input_x.numpy())
-        np.save(out / "validation_masks.npy",          val_mask.numpy())
-        np.save(out / "masked_target_dataset.npy",     target_input_x.numpy())
-        np.save(out / "target_masks.npy",              target_mask.numpy())
-    else:
-        val_input_x    = validation_dataset_torch
-        val_mask    = torch.zeros(validation_dataset_torch.shape[0], validation_dataset_torch.shape[2], dtype=torch.bool)
-        target_input_x = target_dataset_torch
-        target_mask    = torch.zeros(target_dataset_torch.shape[0], target_dataset_torch.shape[2], dtype=torch.bool)
+    target_train_loader = make_eval_loader(
+        geno=target_train_dataset,
+        pheno_norm=target_train_pheno_norm,
+        pop_label_value=1,
+        batch_size=batch_size,
+        masker=masker,
+        masking=masking,
+        out_dir=out,
+        split_name="target_train",
+    )
 
-        np.save(out / "validation_dataset.npy", val_input_x.numpy())
-        np.save(out / "target_dataset.npy",     target_input_x.numpy())
+    val_loader = make_eval_loader(
+        geno=validation_dataset,
+        pheno_norm=validation_pheno_norm,
+        pop_label_value=0,
+        batch_size=batch_size,
+        masker=masker,
+        masking=masking,
+        out_dir=out,
+        split_name="discovery_validation",
+    )
 
     # ------------------------------------------------------------------
-    # diagnostic heatmap  (always produced; title reflects masking state)
+    # diagnostic heatmap (validation)
     # ------------------------------------------------------------------
+    val_geno_t  = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
+    val_input_x = next(iter(val_loader))[0]  # masked or unmasked input
+    val_mask    = next(iter(val_loader))[3]
+
     plot_example_input_heatmap(
-        original_x=validation_dataset_torch,
+        original_x=val_geno_t,
         masked_x=val_input_x,
         mask=val_mask,
         output_path=out / "example_input_heatmap_val.png",
@@ -217,46 +377,10 @@ def main(
     )
 
     # ------------------------------------------------------------------
-    # build TensorDatasets / DataLoaders
-    # Order for train loader  : (x, pheno, pop_label)
-    # Order for val/target    : (input_x, original_x, pheno, mask, pop_label)
+    # model
     # ------------------------------------------------------------------
-    train_ds = TensorDataset(
-        training_dataset_torch,
-        training_pheno_torch,
-        torch.zeros(len(training_dataset_torch), dtype=torch.long),
-    )
-
-    val_ds = TensorDataset(
-        val_input_x,
-        validation_dataset_torch,
-        validation_pheno_torch,
-        val_mask,
-        torch.zeros(len(validation_dataset_torch), dtype=torch.long),
-    )
-
-    target_ds = TensorDataset(
-        target_input_x,
-        target_dataset_torch,
-        target_pheno_torch,
-        target_mask,
-        torch.ones(len(target_dataset_torch), dtype=torch.long),
-    )
-
-    train_loader  = DataLoader(train_ds,  batch_size=batch_size, shuffle=True)
-    val_loader    = DataLoader(val_ds,    batch_size=batch_size, shuffle=False)
-    target_loader = DataLoader(target_ds, batch_size=batch_size, shuffle=False)
-
-    # ------------------------------------------------------------------
-    # model setup
-    # ------------------------------------------------------------------
-    a = next(iter(train_loader))[0]
-    print("Batch shape:",    a.shape)
-    print("Batch dtype:",    a.dtype)
-    print("Batch min/max:",  a.min().item(), a.max().item())
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
+    print(f"Using device: {device}")
 
     model = ConvVAE(
         input_length=input_length,
@@ -272,25 +396,16 @@ def main(
         pheno_hidden_dim=pheno_hidden_dim,
     ).to(device)
 
-    num_params = sum(p.numel() for p in model.parameters())
-    print(f"Number of parameters in the model: {num_params}")
+    print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # shape tracing
+    # shape trace
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
         logits, mu, logvar, z, pheno_pred = model(x_batch, verbose=True)
 
-    print("\nFinal outputs:")
-    print("logits shape:",    logits.shape)
-    print("mu shape:",        mu.shape)
-    print("logvar shape:",    logvar.shape)
-    print("z shape:",         z.shape)
-    print("pheno_pred shape:", pheno_pred.shape)
-
-    # optimizer with optional per-module weight decay
+    # optimizer
     pheno_head_params = set(model.pheno_head.parameters())
-    other_params = [p for p in model.parameters() if p not in pheno_head_params]
-
+    other_params      = [p for p in model.parameters() if p not in pheno_head_params]
     optimizer = torch.optim.Adam([
         {"params": other_params,            "weight_decay": 0.0},
         {"params": list(pheno_head_params), "weight_decay": pheno_weight_decay},
@@ -299,25 +414,20 @@ def main(
     # ------------------------------------------------------------------
     # training state
     # ------------------------------------------------------------------
-    train_loss_list          = []
-    train_recon_unmasked_list = []
-    train_recon_masked_list  = []
-    train_kl_list            = []
-    train_phenotype_loss_list = []
+    train_loss_list, train_recon_unmasked_list = [], []
+    train_recon_masked_list, train_kl_list     = [], []
+    train_phenotype_loss_list                  = []
 
-    val_loss_list            = []
-    val_recon_unmasked_list  = []
-    val_recon_masked_list    = []
-    val_kl_list              = []
-    val_phenotype_loss_list  = []
+    val_loss_list, val_recon_unmasked_list     = [], []
+    val_recon_masked_list, val_kl_list         = [], []
+    val_phenotype_loss_list                    = []
 
-    best_val_stop_metric     = float("inf")
-    best_model_path          = checkpoint_dir / "best_model.pt"
-    final_model_path         = checkpoint_dir / "final_model.pt"
+    best_val_stop_metric       = float("inf")
+    best_model_path            = checkpoint_dir / "best_model.pt"
+    final_model_path           = checkpoint_dir / "final_model.pt"
     epochs_without_improvement = 0
-    best_epoch               = 0
+    best_epoch                 = 0
 
-    # fresh masker for train-time dynamic masking
     if masking:
         masker = Masker(block_length=block_length, mask_fraction=mask_frac)
 
@@ -325,7 +435,7 @@ def main(
     # training loop
     # ------------------------------------------------------------------
     for epoch in range(num_epochs):
-        train_loss, train_recon_unmasked, train_recon_masked, train_kl, train_phenotype_loss = train_one_epoch(
+        train_loss, train_recon_unmasked, train_recon_masked, train_kl, train_pheno = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -337,7 +447,7 @@ def main(
             gamma=gamma,
         )
 
-        val_loss, val_recon_unmasked, val_recon_masked, val_kl, val_phenotype_loss = evaluate(
+        val_loss, val_recon_unmasked, val_recon_masked, val_kl, val_pheno = evaluate(
             model=model,
             dataloader=val_loader,
             device=device,
@@ -351,36 +461,32 @@ def main(
             val_recon_unmasked
             + alpha * val_recon_masked
             + beta  * val_kl
-            + gamma * val_phenotype_loss
+            + gamma * val_pheno
         )
 
         train_loss_list.append(train_loss)
         train_recon_unmasked_list.append(train_recon_unmasked)
         train_recon_masked_list.append(train_recon_masked)
         train_kl_list.append(train_kl)
-        train_phenotype_loss_list.append(train_phenotype_loss)
+        train_phenotype_loss_list.append(train_pheno)
 
         val_loss_list.append(val_loss)
         val_recon_unmasked_list.append(val_recon_unmasked)
         val_recon_masked_list.append(val_recon_masked)
         val_kl_list.append(val_kl)
-        val_phenotype_loss_list.append(val_phenotype_loss)
+        val_phenotype_loss_list.append(val_pheno)
 
         print(
-            f"Epoch {epoch + 1:03d}/{num_epochs} | "
-            f"train_loss={train_loss:.6f} | "
-            f"val_loss={val_loss:.6f} | "
-            f"train_recon_unmasked={train_recon_unmasked:.6f} | "
-            f"train_pheno_loss={train_phenotype_loss:.6f} | "
-            f"val_recon_unmasked={val_recon_unmasked:.6f} | "
-            f"val_pheno_loss={val_phenotype_loss:.6f}"
+            f"Epoch {epoch+1:03d}/{num_epochs} | "
+            f"train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
+            f"train_recon={train_recon_unmasked:.6f} | train_pheno={train_pheno:.6f} | "
+            f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
         )
 
         if val_stop_metric < (best_val_stop_metric - min_delta):
             best_val_stop_metric       = val_stop_metric
             best_epoch                 = epoch + 1
             epochs_without_improvement = 0
-
             save_checkpoint(
                 path=best_model_path,
                 model=model,
@@ -393,16 +499,15 @@ def main(
         else:
             epochs_without_improvement += 1
             print(
-                f"  No stop-metric improvement for {epochs_without_improvement} epoch(s) "
+                f"  No improvement for {epochs_without_improvement} epoch(s) "
                 f"(best={best_val_stop_metric:.6f} at epoch {best_epoch})"
             )
 
         if epochs_without_improvement >= patience:
-            print(f"Early stopping triggered at epoch {epoch + 1}")
+            print(f"Early stopping at epoch {epoch + 1}")
             break
 
     stopped_epoch = len(train_loss_list)
-
     save_checkpoint(
         path=final_model_path,
         model=model,
@@ -416,9 +521,8 @@ def main(
     # ------------------------------------------------------------------
     # save training history
     # ------------------------------------------------------------------
-    history_path = out / "training_history.npz"
     np.savez(
-        history_path,
+        out / "training_history.npz",
         train_losses=np.array(train_loss_list),
         val_losses=np.array(val_loss_list),
         train_recon_unmasked_losses=np.array(train_recon_unmasked_list),
@@ -427,31 +531,10 @@ def main(
         val_kl_losses=np.array(val_kl_list),
         train_phenotype_losses=np.array(train_phenotype_loss_list),
         val_phenotype_losses=np.array(val_phenotype_loss_list),
-        # only meaningful when masking is enabled; zeros otherwise
         train_recon_masked_losses=np.array(train_recon_masked_list),
         val_recon_masked_losses=np.array(val_recon_masked_list),
     )
-    print(f"Saved training history to: {history_path}")
 
-    # ------------------------------------------------------------------
-    # reload best model
-    # ------------------------------------------------------------------
-    best_checkpoint = torch.load(best_model_path, map_location=device)
-    model.load_state_dict(best_checkpoint["model_state_dict"])
-    print(
-        f"Reloaded best model from epoch {best_checkpoint['epoch']} "
-        f"with stop_metric={best_checkpoint['val_loss']:.6f}"
-    )
-
-    # ------------------------------------------------------------------
-    # use_masked_input flag: only meaningful when masking is enabled
-    # ------------------------------------------------------------------
-    use_masked = masking
-
-    # ------------------------------------------------------------------
-    # loss curves
-    # when masking is off the masked curves are flat zeros — skip them
-    # ------------------------------------------------------------------
     plot_loss_curves(
         train_losses=train_loss_list,
         val_losses=val_loss_list,
@@ -461,194 +544,102 @@ def main(
         val_kl_losses=val_kl_list,
         train_pheno_losses=train_phenotype_loss_list,
         val_pheno_losses=val_phenotype_loss_list,
-        # only pass masked curves when masking was actually used
         train_recon_masked_losses=train_recon_masked_list if masking else None,
-        val_recon_masked_losses=val_recon_masked_list   if masking else None,
+        val_recon_masked_losses=val_recon_masked_list     if masking else None,
         output_dir=out,
     )
 
     # ------------------------------------------------------------------
-    # validation plots
+    # reload best model
     # ------------------------------------------------------------------
-    val_metrics = plot_reconstruction(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        output_dir=out,
-        use_masked_input=use_masked,
-    )
-    print(f"Validation global balanced accuracy: {val_metrics['balanced_accuracy']:.6f}")
-
-    plot_latent_space(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        output_dir=out,
-        save_path="latent_space.png",
-        use_masked_input=use_masked,
+    best_ckpt = torch.load(best_model_path, map_location=device)
+    model.load_state_dict(best_ckpt["model_state_dict"])
+    print(
+        f"Reloaded best model from epoch {best_ckpt['epoch']} "
+        f"with stop_metric={best_ckpt['val_loss']:.6f}"
     )
 
-    val_pheno_metrics = plot_pheno_predictions(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        output_path=out / "pheno_pred_vs_true_val.png",
-        use_masked_input=use_masked,
-        title="Validation phenotype prediction",
-    )
-    print(f"Validation phenotype RMSE: {val_pheno_metrics['rmse']:.6f}")
-    print(f"Validation phenotype R^2:  {val_pheno_metrics['r2']:.6f}")
+    use_masked = masking
 
-    plot_pheno_predictions_by_population(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        output_path=out / "pheno_pred_vs_true_val_by_population.png",
-        use_masked_input=use_masked,
-        title="Validation phenotype prediction by population",
+    # ------------------------------------------------------------------
+    # per-split evaluation plots
+    # ------------------------------------------------------------------
+    run_eval_plots(
+        model=model, loader=disc_train_loader, device=device,
+        out_dir=plots_dir, split_name="discovery_train",
+        use_masked=use_masked, loss_fn=vae_loss,
+        alpha=alpha, beta=beta, gamma=gamma,
     )
 
-    plot_pheno_residuals(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        output_path=out / "pheno_residuals_val.png",
-        use_masked_input=use_masked,
-        title="Validation phenotype residuals",
+    run_eval_plots(
+        model=model, loader=target_train_loader, device=device,
+        out_dir=plots_dir, split_name="target_train",
+        use_masked=use_masked, loss_fn=vae_loss,
+        alpha=alpha, beta=beta, gamma=gamma,
+    )
+
+    run_eval_plots(
+        model=model, loader=val_loader, device=device,
+        out_dir=plots_dir, split_name="discovery_validation",
+        use_masked=use_masked, loss_fn=vae_loss,
+        alpha=alpha, beta=beta, gamma=gamma,
     )
 
     # ------------------------------------------------------------------
-    # target evaluation
+    # shared-coordinate latent PCA across all three splits
     # ------------------------------------------------------------------
-    target_loss, target_recon_unmasked, target_recon_masked, target_kl, target_pheno = evaluate(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        loss_fn=vae_loss,
-        alpha=alpha,
-        beta=beta,
-        gamma=gamma,
-    )
-
-    print("\nTarget set evaluation:")
-    print(f"target_loss            = {target_loss:.6f}")
-    print(f"target_recon_unmasked  = {target_recon_unmasked:.6f}")
-    if masking:
-        print(f"target_recon_masked    = {target_recon_masked:.6f}")
-    print(f"target_kl              = {target_kl:.6f}")
-    print(f"target_pheno_loss      = {target_pheno:.6f}")
-
-    target_out_path = out / "target"
-    target_out_path.mkdir(exist_ok=True)
-
-    target_metrics = plot_reconstruction(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        output_dir=target_out_path,
-        use_masked_input=use_masked,
-    )
-    print(f"Target global balanced accuracy: {target_metrics['balanced_accuracy']:.6f}")
-
-    plot_latent_space(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        output_dir=target_out_path,
-        save_path="latent_space.png",
-        use_masked_input=use_masked,
-    )
-
-    target_pheno_metrics = plot_pheno_predictions(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        output_path=target_out_path / "pheno_pred_vs_true_target.png",
-        use_masked_input=use_masked,
-        title="Target phenotype prediction",
-    )
-    print(f"Target phenotype RMSE: {target_pheno_metrics['rmse']:.6f}")
-    print(f"Target phenotype R^2:  {target_pheno_metrics['r2']:.6f}")
-
-    plot_pheno_predictions_by_population(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        output_path=target_out_path / "pheno_pred_vs_true_target_by_population.png",
-        use_masked_input=use_masked,
-        title="Target phenotype prediction by population",
-    )
-
-    plot_pheno_residuals(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        output_path=target_out_path / "pheno_residuals_target.png",
-        use_masked_input=use_masked,
-        title="Target phenotype residuals",
-    )
-
-    # ------------------------------------------------------------------
-    # shared-coordinate latent PCA
-    # ------------------------------------------------------------------
-    train_mu, _ = extract_mu(
-        model=model,
-        dataloader=train_loader,
-        device=device,
-        use_masked_input=False,
-    )
-
-    val_mu, _ = extract_mu(
-        model=model,
-        dataloader=val_loader,
-        device=device,
-        use_masked_input=use_masked,
-    )
-
-    target_mu, _ = extract_mu(
-        model=model,
-        dataloader=target_loader,
-        device=device,
-        use_masked_input=use_masked,
-    )
+    disc_train_mu, _ = extract_mu(model, disc_train_loader,   device, use_masked_input=use_masked)
+    target_train_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
+    val_mu, _          = extract_mu(model, val_loader,          device, use_masked_input=use_masked)
 
     plot_latent_pca_shared_basis(
-        reference_mu=train_mu,
+        reference_mu=disc_train_mu,
         ceu_mu=val_mu,
-        yri_mu=target_mu,
-        output_path=out / "latent_pca_ceu_basis_val_vs_target.png",
+        yri_mu=target_train_mu,
+        output_path=plots_dir / "latent_pca_shared_basis.png",
         reference_name="CEU discovery train",
         ceu_name="CEU validation",
-        yri_name="YRI target",
+        yri_name="YRI target train",
     )
 
+
+# =============================================================================
+# CLI
+# =============================================================================
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Train masked ConvVAE on genotype data and save plots, checkpoints, and evaluation outputs."
+    p = argparse.ArgumentParser(
+        description="Train ConvVAE on mixed CEU+YRI genotypes; evaluate per population."
     )
-    parser.add_argument("--vae-config",        type=Path, required=True)
-    parser.add_argument("--training-data",     type=Path, required=True)
-    parser.add_argument("--validation-data",   type=Path, required=True)
-    parser.add_argument("--target-data",       type=Path, required=True)
-    parser.add_argument("--training-pheno",    type=Path, required=True)
-    parser.add_argument("--validation-pheno",  type=Path, required=True)
-    parser.add_argument("--target-pheno",      type=Path, required=True)
-    parser.add_argument("--outputs",           type=Path, required=True)
-    return parser
+    p.add_argument("--vae-config",           type=Path, required=True)
+    p.add_argument("--training-data",        type=Path, required=True,
+                   help="Stacked CEU+YRI genotypes: training.npy")
+    p.add_argument("--disc-train-data",      type=Path, required=True,
+                   help="CEU-only training genotypes: discovery_train.npy (eval only)")
+    p.add_argument("--target-train-data",    type=Path, required=True,
+                   help="YRI-only training genotypes: target_train.npy (eval only)")
+    p.add_argument("--validation-data",      type=Path, required=True,
+                   help="CEU validation genotypes: discovery_validation.npy")
+    p.add_argument("--disc-train-pheno",     type=Path, required=True,
+                   help="CEU training phenotypes: simulated_phenotype_disc_train.npy")
+    p.add_argument("--target-train-pheno",   type=Path, required=True,
+                   help="YRI training phenotypes: simulated_phenotype_target_train.npy")
+    p.add_argument("--validation-pheno",     type=Path, required=True,
+                   help="CEU validation phenotypes: simulated_phenotype_disc_val.npy")
+    p.add_argument("--outputs",              type=Path, required=True)
+    return p
 
 
 if __name__ == "__main__":
-    parser = build_parser()
-    args   = parser.parse_args()
-
+    args = build_parser().parse_args()
     main(
         vae_config_path=args.vae_config,
         training_data_path=args.training_data,
+        disc_train_data_path=args.disc_train_data,
+        target_train_data_path=args.target_train_data,
         validation_data_path=args.validation_data,
-        target_data_path=args.target_data,
-        output_dir=args.outputs,
-        training_pheno_path=args.training_pheno,
+        disc_train_pheno_path=args.disc_train_pheno,
+        target_train_pheno_path=args.target_train_pheno,
         validation_pheno_path=args.validation_pheno,
-        target_pheno_path=args.target_pheno,
+        output_dir=args.outputs,
     )

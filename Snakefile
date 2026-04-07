@@ -6,15 +6,17 @@ from pathlib import Path
 
 import yaml
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Grid helpers
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def set_nested(d, path, value):
     keys = path.split(".")
     cur = d
     for key in keys[:-1]:
         cur = cur[key]
     cur[keys[-1]] = value
+
 
 def get_nested(d, path):
     keys = path.split(".")
@@ -23,12 +25,14 @@ def get_nested(d, path):
         cur = cur[key]
     return cur
 
+
 def sanitize_tag_value(x):
     s = str(x)
     s = s.replace(".", "p")
     s = s.replace("-", "m")
     s = re.sub(r"[^A-Za-z0-9_]+", "", s)
     return s
+
 
 def make_exp_id(prefix, sep, assignments, dims):
     parts = [prefix] if prefix else []
@@ -37,45 +41,41 @@ def make_exp_id(prefix, sep, assignments, dims):
         parts.append(f"{tag}{sanitize_tag_value(value)}")
     return sep.join(parts) if parts else "default"
 
+
 def build_experiment_grid(base_cfg):
     grid_cfg = base_cfg.get("grid", {})
-    enabled = bool(grid_cfg.get("enabled", False))
-    dims = grid_cfg.get("dims", [])
+    enabled  = bool(grid_cfg.get("enabled", False))
+    dims     = grid_cfg.get("dims", [])
 
     if not enabled or len(dims) == 0:
         return {
             "default": {
                 "config": copy.deepcopy(base_cfg),
-                "assignments": {}
+                "assignments": {},
             }
         }
 
-    prefix = grid_cfg.get("name", {}).get("prefix", "experiment")
-    sep = grid_cfg.get("name", {}).get("sep", "__")
-
+    prefix      = grid_cfg.get("name", {}).get("prefix", "experiment")
+    sep         = grid_cfg.get("name", {}).get("sep", "__")
     value_lists = [dim["values"] for dim in dims]
-    combos = itertools.product(*value_lists)
 
     experiments = {}
-    for combo in combos:
-        cfg = copy.deepcopy(base_cfg)
+    for combo in itertools.product(*value_lists):
+        cfg         = copy.deepcopy(base_cfg)
         assignments = {}
-
         for dim, value in zip(dims, combo):
             set_nested(cfg, dim["path"], value)
             assignments[dim["path"]] = value
-
         exp_id = make_exp_id(prefix, sep, combo, dims)
-        experiments[exp_id] = {
-            "config": cfg,
-            "assignments": assignments,
-        }
+        experiments[exp_id] = {"config": cfg, "assignments": assignments}
 
     return experiments
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # Load config files
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 EXP_CFG_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/experiment_config_IM_symmetric.json")
 VAE_YAML_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/model_hyperparams/vae.yaml")
 
@@ -83,34 +83,30 @@ EXP_CFG = json.loads(EXP_CFG_PATH.read_text())
 VAE_CFG = yaml.safe_load(VAE_YAML_PATH.read_text())
 
 EXPERIMENTS = build_experiment_grid(VAE_CFG)
-EXP_IDS = sorted(EXPERIMENTS.keys())
+EXP_IDS     = sorted(EXPERIMENTS.keys())
 
 print("Resolved VAE experiments:")
 for exp_id, spec in EXPERIMENTS.items():
     print(f"  {exp_id}: {spec['assignments']}")
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Core settings from experiment config
-# -----------------------------------------------------------------------------
-MODEL = EXP_CFG["demographic_model"]
-NUM_DRAWS = int(EXP_CFG.get("num_draws", 1))
-NUM_REPLICATES = int(EXP_CFG.get("num_replicates", 1))
-MAF_THRESHOLD = float(EXP_CFG.get("maf_threshold", 0.0))
-DISCOVERY_POP = str(EXP_CFG.get("discovery", "CEU"))
+# =============================================================================
 
-SUBSET_SNPS = int(EXP_CFG.get("subset_snps", 10000))
-SUBSET_BP = EXP_CFG.get("subset_bp", None)
-SUBSET_MODE = str(EXP_CFG.get("subset_mode", "random"))
-SUBSET_SEED = int(EXP_CFG.get("subset_seed", 295))
-VAL_FRAC = float(EXP_CFG.get("val_frac", 0.2))
-SPLIT_SEED = int(EXP_CFG.get("split_seed", 42))
+MODEL               = EXP_CFG["demographic_model"]
+NUM_DRAWS           = int(EXP_CFG.get("num_draws", 1))
+NUM_REPLICATES      = int(EXP_CFG.get("num_replicates", 1))
+MAF_THRESHOLD       = float(EXP_CFG.get("maf_threshold", 0.0))
+DISCOVERY_POP       = str(EXP_CFG.get("discovery", "CEU"))
+SUBSET_SNPS         = int(EXP_CFG.get("subset_snps", 10000))
+SUBSET_BP           = EXP_CFG.get("subset_bp", None)
+SUBSET_MODE         = str(EXP_CFG.get("subset_mode", "random"))
+SUBSET_SEED         = int(EXP_CFG.get("subset_seed", 295))
+SPLIT_SEED          = int(EXP_CFG.get("split_seed", 42))
+DISC_TRAIN_FRAC     = float(EXP_CFG.get("discovery_train_frac", 0.8))
+TARGET_HELD_OUT_FRAC = float(EXP_CFG.get("target_held_out_frac", 0.8))
 
-# -----------------------------------------------------------------------------
-# Optional: inspect VAE YAML grid
-# -----------------------------------------------------------------------------
-VAE_GRID_CFG = VAE_CFG.get("grid", {})
-VAE_GRID_ENABLED = bool(VAE_GRID_CFG.get("enabled", False))
-VAE_GRID_DIMS = VAE_GRID_CFG.get("dims", [])
+PHENO_BASEDIR = Path("/sietch_colab/akapoor/XPopVAE/phenotype_creation")
 
 print("Loaded experiment config:")
 print(f"  MODEL={MODEL}")
@@ -118,6 +114,12 @@ print(f"  NUM_DRAWS={NUM_DRAWS}")
 print(f"  NUM_REPLICATES={NUM_REPLICATES}")
 print(f"  MAF_THRESHOLD={MAF_THRESHOLD}")
 print(f"  DISCOVERY_POP={DISCOVERY_POP}")
+print(f"  DISC_TRAIN_FRAC={DISC_TRAIN_FRAC}")
+print(f"  TARGET_HELD_OUT_FRAC={TARGET_HELD_OUT_FRAC}")
+
+VAE_GRID_CFG     = VAE_CFG.get("grid", {})
+VAE_GRID_ENABLED = bool(VAE_GRID_CFG.get("enabled", False))
+VAE_GRID_DIMS    = VAE_GRID_CFG.get("dims", [])
 
 print("Loaded VAE config:")
 print(f"  grid.enabled={VAE_GRID_ENABLED}")
@@ -125,48 +127,49 @@ if VAE_GRID_ENABLED:
     for dim in VAE_GRID_DIMS:
         print(f"  grid dim: path={dim.get('path')} values={dim.get('values')} tag={dim.get('tag')}")
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Scripts
-# -----------------------------------------------------------------------------
-SIM_SCRIPT = "snakemake_scripts/run_simulation.py"
-BUILD_GT_SCRIPT = "snakemake_scripts/run_build_genotypes.py"
-TRAIN_VAE_SCRIPT = "snakemake_scripts/train_vae_wrapper.py"
-COMPARE_LD_SCRIPT = "snakemake_scripts/compare_ld_decay.py"
-DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
-BASELINE_SCRIPT = "snakemake_scripts/baseline_predictors.py"
+# =============================================================================
 
-# -----------------------------------------------------------------------------
+SIM_SCRIPT          = "snakemake_scripts/run_simulation.py"
+BUILD_GT_SCRIPT     = "snakemake_scripts/run_build_genotypes.py"
+TRAIN_VAE_SCRIPT    = "snakemake_scripts/train_vae_wrapper.py"
+COMPARE_LD_SCRIPT   = "snakemake_scripts/compare_ld_decay.py"
+DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
+BASELINE_SCRIPT     = "snakemake_scripts/baseline_predictors.py"
+
+# =============================================================================
 # Directories
-# -----------------------------------------------------------------------------
-SIM_BASEDIR = Path(f"experiments/{MODEL}/simulations")
+# =============================================================================
+
+SIM_BASEDIR  = Path(f"experiments/{MODEL}/simulations")
 PROC_BASEDIR = Path(f"experiments/{MODEL}/processed_data")
-VAE_BASEDIR = Path(f"experiments/{MODEL}/vae")
+VAE_BASEDIR  = Path(f"experiments/{MODEL}/vae")
 
 SIM_BASEDIR.mkdir(parents=True, exist_ok=True)
 PROC_BASEDIR.mkdir(parents=True, exist_ok=True)
 VAE_BASEDIR.mkdir(parents=True, exist_ok=True)
 
-# -----------------------------------------------------------------------------
-# Wildcard values from config
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Wildcard values
+# =============================================================================
+
 SIM_NUMBERS = [str(i) for i in range(NUM_DRAWS)]
-REPLICATES = [str(i) for i in range(NUM_REPLICATES)]
+REPLICATES  = [str(i) for i in range(NUM_REPLICATES)]
 
-# -----------------------------------------------------------------------------
-# Use sim 0 / rep0 processed data for VAE training
-# -----------------------------------------------------------------------------
-DISCOVERY_TRAIN = PROC_BASEDIR / "0/rep0/discovery_train.npy"
-DISCOVERY_VAL = PROC_BASEDIR / "0/rep0/discovery_val.npy"
-TARGET = PROC_BASEDIR / "0/rep0/target.npy"
+# =============================================================================
+# Fixed data paths (sim 0 / rep0) used by VAE training + diagnostics
+# =============================================================================
 
-# Define the phenotype paths as well
-# DISCOVERY_TRAIN_PHENO = PROC_BASEDIR / "0/rep0/discovery_train_pheno.npy"
-# DISCOVERY_VAL_PHENO = PROC_BASEDIR / "0/rep0/discovery_val_pheno.npy"
-# TARGET_PHENO = PROC_BASEDIR / "0/rep0/target_pheno.npy"
+DISCOVERY_TRAIN = PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_train.npy"
+DISCOVERY_VAL   = PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy"
+TARGET_TRAIN    = PROC_BASEDIR / "0/rep0/genotype_matrices/target_train.npy"
+TARGET_HELD_OUT = PROC_BASEDIR / "0/rep0/genotype_matrices/target_held_out.npy"
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Helper functions
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def sim_dir(wc):
     return SIM_BASEDIR / wc.sim_number / f"rep{wc.replicate}"
 
@@ -188,96 +191,52 @@ def exp_af_ld_diag_dir(wc):
 def exp_config_path(wc):
     return exp_dir(wc) / "resolved_vae_config.yaml"
 
-# -----------------------------------------------------------------------------
-# Grid helpers
-# -----------------------------------------------------------------------------
-def set_nested(d, path, value):
-    keys = path.split(".")
-    cur = d
-    for key in keys[:-1]:
-        cur = cur[key]
-    cur[keys[-1]] = value
 
-def get_nested(d, path):
-    keys = path.split(".")
-    cur = d
-    for key in keys:
-        cur = cur[key]
-    return cur
-
-def sanitize_tag_value(x):
-    s = str(x)
-    s = s.replace(".", "p")
-    s = s.replace("-", "m")
-    s = re.sub(r"[^A-Za-z0-9_]+", "", s)
-    return s
-
-def make_exp_id(prefix, sep, assignments, dims):
-    parts = [prefix] if prefix else []
-    for dim, value in zip(dims, assignments):
-        tag = dim.get("tag", dim["path"].replace(".", "_"))
-        parts.append(f"{tag}{sanitize_tag_value(value)}")
-    return sep.join(parts) if parts else "default"
-
-def build_experiment_grid(base_cfg):
-    grid_cfg = base_cfg.get("grid", {})
-    enabled = bool(grid_cfg.get("enabled", False))
-    dims = grid_cfg.get("dims", [])
-
-    if not enabled or len(dims) == 0:
-        return {
-            "default": {
-                "config": copy.deepcopy(base_cfg),
-                "assignments": {}
-            }
-        }
-
-    prefix = grid_cfg.get("name", {}).get("prefix", "experiment")
-    sep = grid_cfg.get("name", {}).get("sep", "__")
-
-    value_lists = [dim["values"] for dim in dims]
-    combos = itertools.product(*value_lists)
-
-    experiments = {}
-    for combo in combos:
-        cfg = copy.deepcopy(base_cfg)
-        assignments = {}
-        for dim, value in zip(dims, combo):
-            set_nested(cfg, dim["path"], value)
-            assignments[dim["path"]] = value
-
-        exp_id = make_exp_id(prefix, sep, combo, dims)
-        experiments[exp_id] = {
-            "config": cfg,
-            "assignments": assignments,
-        }
-
-    return experiments
-
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Final targets
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 rule all:
     input:
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train.npy",
+        # --- genotype_matrices/ ---
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val.npy",
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/target.npy",
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/validation.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/held_out.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
 
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_pheno.npy",
+        # --- phenotypes/ ---
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_pheno.npy",
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/target_pheno.npy",
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/validation_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/held_out_pheno.npy",
+               sim_number=SIM_NUMBERS, replicate=REPLICATES),
+        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
 
+        # --- auxiliary ---
         expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
         expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
                sim_number=SIM_NUMBERS, replicate=REPLICATES),
 
+        # --- VAE checkpoints + training history ---
         expand(VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
                exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
@@ -286,22 +245,41 @@ rule all:
                exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
                exp_id=EXP_IDS),
+
+        # --- VAE per-split plots (sentinel files) ---
+        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/target_train/latent_space.png",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
+               exp_id=EXP_IDS),
+
+        # --- LD decay diagnostics ---
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_truth_vs_reconstructed.png",
                exp_id=EXP_IDS),
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
                exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_truth_vs_reconstructed.png",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_truth_vs_reconstructed.png",
+               exp_id=EXP_IDS),
+        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+               exp_id=EXP_IDS),
 
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_truth_vs_reconstructed.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_summary.txt",
-               exp_id=EXP_IDS),
+        # --- allele freq vs LD diagnostic ---
         expand(VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
                exp_id=EXP_IDS),
+
+        # --- baselines ---
         PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # 1. Run one simulation
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 rule run_simulation:
     input:
         script=SIM_SCRIPT,
@@ -328,9 +306,11 @@ rule run_simulation:
             --output-dir {params.output_dir}
         """
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # 2. Build genotype arrays from one simulation
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 rule build_genotypes:
     input:
         script=BUILD_GT_SCRIPT,
@@ -338,14 +318,23 @@ rule build_genotypes:
         phenotype=SIM_BASEDIR / "{sim_number}/rep{replicate}/phenotype.pkl",
         experiment_config=EXP_CFG_PATH,
     output:
-        discovery_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train.npy",
-        discovery_val=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val.npy",
-        target=PROC_BASEDIR / "{sim_number}/rep{replicate}/target.npy",
-
-        discovery_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_pheno.npy",
-        discovery_val_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_pheno.npy",
-        target_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_pheno.npy",
-
+        # --- genotype_matrices/ ---
+        training=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
+        discovery_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        target_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
+        validation=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/validation.npy",
+        discovery_validation=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+        held_out=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/held_out.npy",
+        target_held_out=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+        # --- phenotypes/ ---
+        training_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
+        discovery_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        target_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
+        validation_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/validation_pheno.npy",
+        discovery_validation_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+        held_out_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/held_out_pheno.npy",
+        target_held_out_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
+        # --- auxiliary (outdir root) ---
         meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
         hap_meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
         all_individuals=PROC_BASEDIR / "{sim_number}/rep{replicate}/all_individuals.npy",
@@ -357,7 +346,8 @@ rule build_genotypes:
         ts_individual_ids=PROC_BASEDIR / "{sim_number}/rep{replicate}/ts_individual_ids.npy",
         disc_train_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_idx.npy",
         disc_val_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_idx.npy",
-        target_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_idx.npy",
+        target_train_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_train_idx.npy",
+        target_held_out_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_held_out_idx.npy",
         site_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/site_filter_report.txt",
         genotype_site_stats=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_site_stats.txt",
         train_mono_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/train_mono_filter_report.txt",
@@ -367,7 +357,8 @@ rule build_genotypes:
         subset_snps=SUBSET_SNPS,
         subset_mode=SUBSET_MODE,
         subset_seed=SUBSET_SEED,
-        val_frac=VAL_FRAC,
+        disc_train_frac=DISC_TRAIN_FRAC,
+        target_held_out_frac=TARGET_HELD_OUT_FRAC,
         split_seed=SPLIT_SEED,
         discovery_pop=DISCOVERY_POP,
     shell:
@@ -381,54 +372,93 @@ rule build_genotypes:
             --subset-snps {params.subset_snps} \
             --subset-mode {params.subset_mode} \
             --subset-seed {params.subset_seed} \
-            --val-frac {params.val_frac} \
+            --disc-train-frac {params.disc_train_frac} \
+            --target-held-out-frac {params.target_held_out_frac} \
             --split-seed {params.split_seed} \
             --discovery-pop {params.discovery_pop}
         """
 
+
+# =============================================================================
+# 3. Write resolved VAE config
+# =============================================================================
+
+rule write_vae_config:
+    input:
+        source_config=VAE_YAML_PATH,
+    output:
+        config=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
+    run:
+        exp_id = wildcards.exp_id
+        cfg    = copy.deepcopy(EXPERIMENTS[exp_id]["config"])
+        outdir = Path(output.config).parent
+        outdir.mkdir(parents=True, exist_ok=True)
+        with open(output.config, "w") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False)
+
+
+# =============================================================================
+# 4. Train VAE
+# =============================================================================
+
 rule train_vae:
     input:
         vae_yaml=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
-        training_data=DISCOVERY_TRAIN,
-        validation_data=DISCOVERY_VAL,
-        training_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
-        validation_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
-        target_pheno='/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
-        target_data=TARGET,
         script=TRAIN_VAE_SCRIPT,
+        # genotypes
+        training_data=PROC_BASEDIR / "0/rep0/genotype_matrices/training.npy",
+        disc_train_data=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_train.npy",
+        target_train_data=PROC_BASEDIR / "0/rep0/genotype_matrices/target_train.npy",
+        validation_data=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy",
+        # phenotypes
+        disc_train_pheno=PHENO_BASEDIR / "simulated_phenotype_disc_train.npy",
+        target_train_pheno=PHENO_BASEDIR / "simulated_phenotype_target_train.npy",
+        validation_pheno=PHENO_BASEDIR / "simulated_phenotype_disc_val.npy",
     output:
         best_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         final_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
         history=VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
-        # Snapshot of training inputs
-        training_data=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
-        validation_data=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_val.npy",
-        target_data=VAE_BASEDIR / "{exp_id}/training_inputs/target.npy",
-        training_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_train.npy",
-        validation_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_val.npy",
-        target_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_target.npy",
+        # per-split plot sentinel files
+        disc_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
+        target_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/target_train/latent_space.png",
+        val_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
+        # snapshots of training inputs
+        snap_training=VAE_BASEDIR / "{exp_id}/training_inputs/training.npy",
+        snap_disc_train=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
+        snap_target_train=VAE_BASEDIR / "{exp_id}/training_inputs/target_train.npy",
+        snap_val=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_validation.npy",
+        snap_disc_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_disc_train.npy",
+        snap_target_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_target_train.npy",
+        snap_val_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_disc_val.npy",
     params:
         outdir=lambda wc: VAE_BASEDIR / wc.exp_id,
     shell:
         r"""
         python {input.script} \
-            --vae-config {input.vae_yaml} \
-            --training-data {input.training_data} \
-            --validation-data {input.validation_data} \
-            --target-data {input.target_data} \
-            --training-pheno {input.training_pheno} \
-            --validation-pheno {input.validation_pheno} \
-            --target-pheno {input.target_pheno} \
-            --outputs {params.outdir}
+            --vae-config          {input.vae_yaml} \
+            --training-data       {input.training_data} \
+            --disc-train-data     {input.disc_train_data} \
+            --target-train-data   {input.target_train_data} \
+            --validation-data     {input.validation_data} \
+            --disc-train-pheno    {input.disc_train_pheno} \
+            --target-train-pheno  {input.target_train_pheno} \
+            --validation-pheno    {input.validation_pheno} \
+            --outputs             {params.outdir}
 
         mkdir -p {params.outdir}/training_inputs
-        cp {input.training_data}    {output.training_data}
-        cp {input.validation_data}  {output.validation_data}
-        cp {input.target_data}      {output.target_data}
-        cp {input.training_pheno}   {output.training_pheno}
-        cp {input.validation_pheno} {output.validation_pheno}
-        cp {input.target_pheno}     {output.target_pheno}
+        cp {input.training_data}       {output.snap_training}
+        cp {input.disc_train_data}     {output.snap_disc_train}
+        cp {input.target_train_data}   {output.snap_target_train}
+        cp {input.validation_data}     {output.snap_val}
+        cp {input.disc_train_pheno}    {output.snap_disc_train_pheno}
+        cp {input.target_train_pheno}  {output.snap_target_train_pheno}
+        cp {input.validation_pheno}    {output.snap_val_pheno}
         """
+
+
+# =============================================================================
+# 5. LD decay — discovery validation
+# =============================================================================
 
 rule compare_ld_decay_discovery:
     input:
@@ -466,25 +496,29 @@ rule compare_ld_decay_discovery:
         """
 
 
-rule compare_ld_decay_target:
+# =============================================================================
+# 6. LD decay — target train (YRI, seen during training)
+# =============================================================================
+
+rule compare_ld_decay_target_train:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
-        genotype_npy=TARGET,
+        genotype_npy=TARGET_TRAIN,
         variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
-        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/reconstructed_genotypes_argmax.npy",
-        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_curves.npz",
-        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_truth_vs_reconstructed.png",
-        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target/ld_decay_summary.txt",
+        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
     params:
-        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target",
+        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target_train",
         batch_size=128,
         distance_mode="bp",
         max_bp_distance=50000,
         bp_bin_size=1000,
-        label="target_yri",
-        title=lambda wc: f"LD decay: Target/YRI ({wc.exp_id})",
+        label="target_train_yri",
+        title=lambda wc: f"LD decay: Target Train/YRI ({wc.exp_id})",
     shell:
         r"""
         python {input.script} \
@@ -500,7 +534,52 @@ rule compare_ld_decay_target:
             --title "{params.title}" \
             --include-metrics-in-title
         """
-        
+
+
+# =============================================================================
+# 7. LD decay — target held out (YRI, never seen during training)
+# =============================================================================
+
+rule compare_ld_decay_target_held_out:
+    input:
+        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        genotype_npy=TARGET_HELD_OUT,
+        variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
+        script=COMPARE_LD_SCRIPT,
+    output:
+        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+    params:
+        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target_held_out",
+        batch_size=128,
+        distance_mode="bp",
+        max_bp_distance=50000,
+        bp_bin_size=1000,
+        label="target_held_out_yri",
+        title=lambda wc: f"LD decay: Target Held Out/YRI ({wc.exp_id})",
+    shell:
+        r"""
+        python {input.script} \
+            --checkpoint {input.checkpoint} \
+            --genotype-npy {input.genotype_npy} \
+            --variant-positions-npy {input.variant_positions} \
+            --output-dir {params.output_dir} \
+            --batch-size {params.batch_size} \
+            --distance-mode {params.distance_mode} \
+            --max-bp-distance {params.max_bp_distance} \
+            --bp-bin-size {params.bp_bin_size} \
+            --label {params.label} \
+            --title "{params.title}" \
+            --include-metrics-in-title
+        """
+
+
+# =============================================================================
+# 8. Allele freq vs LD diagnostic
+# =============================================================================
+
 rule diagnose_allelefreq_vs_ld:
     input:
         checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
@@ -536,37 +615,26 @@ rule diagnose_allelefreq_vs_ld:
             --maf-bins {params.maf_bins}
         """
 
-rule write_vae_config:
-    input:
-        source_config=VAE_YAML_PATH
-    output:
-        config=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
-    run:
-        exp_id = wildcards.exp_id
-        cfg = copy.deepcopy(EXPERIMENTS[exp_id]["config"])
 
-        outdir = Path(output.config).parent
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        with open(output.config, "w") as f:
-            yaml.safe_dump(cfg, f, sort_keys=False)
+# =============================================================================
+# 9. Baselines
+# =============================================================================
 
 rule run_baselines:
     input:
-        script      = BASELINE_SCRIPT,
-        x_train     = DISCOVERY_TRAIN,
-        # TODO: The current phenotype files are using the sanity check ones. 
-        y_train     = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_train.npy',
-        x_val       = DISCOVERY_VAL,
-        y_val       = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_val.npy',
-        x_test      = TARGET,
-        y_test      = '/sietch_colab/akapoor/XPopVAE/phenotype_creation/simulated_phenotype_target.npy',
+        script=BASELINE_SCRIPT,
+        x_train=DISCOVERY_TRAIN,
+        y_train=PHENO_BASEDIR / "simulated_phenotype_disc_train.npy",
+        x_val=DISCOVERY_VAL,
+        y_val=PHENO_BASEDIR / "simulated_phenotype_disc_val.npy",
+        x_test=TARGET_HELD_OUT,
+        y_test=PHENO_BASEDIR / "simulated_phenotype_target_held_out.npy",
     output:
-        results = PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+        results=PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
     params:
-        out_dir = PROC_BASEDIR / "0/rep0/baselines",
-        h2      = float(EXP_CFG.get("h2", 1.0)),
-        seed    = 42,
+        out_dir=PROC_BASEDIR / "0/rep0/baselines",
+        h2=float(EXP_CFG.get("h2", 1.0)),
+        seed=42,
     shell:
         r"""
         python {input.script} \

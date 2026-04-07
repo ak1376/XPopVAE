@@ -8,6 +8,8 @@
     "CEU": 1000
   },
   "discovery": "CEU",
+  "discovery_train_frac": 0.8,
+  "target_held_out_frac": 0.8,
   "seed": 295,
   "num_draws": 1,
   "num_replicates": 1,
