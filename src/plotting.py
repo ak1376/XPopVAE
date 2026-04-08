@@ -34,15 +34,10 @@ def _get_input_and_metadata_from_batch(batch, use_masked_input=False):
     Returns
     -------
     x_input : torch.Tensor
-        Input that should be fed into the model.
-    x_true : torch.Tensor
-        True unmasked genotype tensor.
-    pheno : torch.Tensor
-        True phenotype tensor.
+    x_true  : torch.Tensor
+    pheno   : torch.Tensor
     pop_label : torch.Tensor
-        Population labels.
-    mask : torch.Tensor or None
-        Mask tensor if present, else None.
+    mask    : torch.Tensor or None
     """
     if len(batch) == 3:
         x, pheno, pop_label = batch
@@ -78,7 +73,8 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
 
         x_input = x_input.to(device)
 
-        logits, mu, logvar, z, pheno_pred = model(x_input)
+        # model returns 6 values; domain_logits ignored here
+        logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
 
         all_true.append(_to_numpy(pheno))
         all_pred.append(_to_numpy(pheno_pred))
@@ -86,7 +82,7 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
 
     y_true = np.concatenate(all_true, axis=0).squeeze()
     y_pred = np.concatenate(all_pred, axis=0).squeeze()
-    pop = np.concatenate(all_pop, axis=0).squeeze()
+    pop    = np.concatenate(all_pop,  axis=0).squeeze()
 
     return y_true, y_pred, pop
 
@@ -109,7 +105,7 @@ def plot_pheno_predictions(
         use_masked_input=use_masked_input,
     )
 
-    mse = np.mean((y_true - y_pred) ** 2)
+    mse  = np.mean((y_true - y_pred) ** 2)
     rmse = np.sqrt(mse)
 
     ss_res = np.sum((y_true - y_pred) ** 2)
@@ -132,14 +128,14 @@ def plot_pheno_predictions(
 
     print(f"Saved phenotype prediction plot to: {output_path}")
     print(f"Phenotype RMSE: {rmse:.6f}")
-    print(f"Phenotype R^2: {r2:.6f}")
+    print(f"Phenotype R^2:  {r2:.6f}")
 
     return {
-        "rmse": float(rmse),
-        "r2": float(r2),
+        "rmse":   float(rmse),
+        "r2":     float(r2),
         "y_true": y_true,
         "y_pred": y_pred,
-        "pop": pop,
+        "pop":    pop,
     }
 
 
@@ -166,13 +162,7 @@ def plot_pheno_predictions_by_population(
     for pop_value, label in [(0, "CEU/discovery"), (1, "YRI/target")]:
         idx = pop == pop_value
         if np.any(idx):
-            plt.scatter(
-                y_true[idx],
-                y_pred[idx],
-                alpha=0.6,
-                s=20,
-                label=label,
-            )
+            plt.scatter(y_true[idx], y_pred[idx], alpha=0.6, s=20, label=label)
 
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
@@ -244,9 +234,10 @@ def plot_reconstruction(
         )
 
         x_input = x_input.to(device)
-        x_true = x_true.to(device)
+        x_true  = x_true.to(device)
 
-        logits, mu, logvar, z, pheno_pred = model(x_input)
+        # model returns 6 values; domain_logits ignored here
+        logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
 
         y_true = x_true.long().squeeze(1).cpu().numpy()
         y_pred = torch.argmax(logits, dim=1).cpu().numpy()
@@ -254,29 +245,24 @@ def plot_reconstruction(
         all_y_true.append(y_true)
         all_y_pred.append(y_pred)
 
-    y_true_all = np.concatenate(all_y_true, axis=0)
-    y_pred_all = np.concatenate(all_y_pred, axis=0)
-
+    y_true_all  = np.concatenate(all_y_true, axis=0)
+    y_pred_all  = np.concatenate(all_y_pred, axis=0)
     y_true_flat = y_true_all.reshape(-1)
     y_pred_flat = y_pred_all.reshape(-1)
 
     classes = np.array([0, 1, 2])
 
     recalls = recall_score(
-        y_true_flat,
-        y_pred_flat,
-        labels=classes,
-        average=None,
-        zero_division=0,
+        y_true_flat, y_pred_flat,
+        labels=classes, average=None, zero_division=0,
     )
     bal_acc = recalls.mean()
 
     cm = confusion_matrix(y_true_flat, y_pred_flat, labels=classes)
 
-    cm_row_sums = cm.sum(axis=1, keepdims=True)
+    cm_row_sums  = cm.sum(axis=1, keepdims=True)
     cm_normalized = np.divide(
-        cm.astype(float),
-        cm_row_sums,
+        cm.astype(float), cm_row_sums,
         out=np.zeros_like(cm, dtype=float),
         where=cm_row_sums != 0,
     )
@@ -297,20 +283,14 @@ def plot_reconstruction(
 
     for i in range(cm_normalized.shape[0]):
         for j in range(cm_normalized.shape[1]):
-            ax.text(
-                j,
-                i,
-                f"{cm_normalized[i, j]:.3f}",
-                ha="center",
-                va="center",
-                color="black",
-            )
+            ax.text(j, i, f"{cm_normalized[i, j]:.3f}",
+                    ha="center", va="center", color="black")
 
     fig.tight_layout()
     fig.savefig(f"{output_dir}/confusion_matrix.png", dpi=300)
     plt.close(fig)
 
-    np.save(f"{output_dir}/confusion_matrix_raw.npy", cm)
+    np.save(f"{output_dir}/confusion_matrix_raw.npy",        cm)
     np.save(f"{output_dir}/confusion_matrix_normalized.npy", cm_normalized)
 
     print(f"Global balanced accuracy: {bal_acc:.6f}")
@@ -318,9 +298,9 @@ def plot_reconstruction(
         print(f"Recall for class {cls}: {rec:.6f}")
 
     return {
-        "balanced_accuracy": float(bal_acc),
-        "recalls": {int(cls): float(rec) for cls, rec in zip(classes, recalls)},
-        "confusion_matrix_raw": cm,
+        "balanced_accuracy":        float(bal_acc),
+        "recalls":                  {int(cls): float(rec) for cls, rec in zip(classes, recalls)},
+        "confusion_matrix_raw":     cm,
         "confusion_matrix_normalized": cm_normalized,
     }
 
@@ -332,7 +312,7 @@ def plot_reconstruction(
 def extract_mu(model, dataloader, device, use_masked_input=False):
     model.eval()
 
-    all_mu = []
+    all_mu     = []
     all_labels = []
 
     for batch in dataloader:
@@ -341,12 +321,14 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
         )
 
         x_input = x_input.to(device)
-        _, mu, _, _, _ = model(x_input)
+
+        # model returns 6 values; domain_logits ignored here
+        _, mu, _, _, _, _domain_logits = model(x_input)
 
         all_mu.append(mu.cpu())
         all_labels.append(pop_label.cpu())
 
-    all_mu = torch.cat(all_mu, dim=0).numpy()
+    all_mu     = torch.cat(all_mu,     dim=0).numpy()
     all_labels = torch.cat(all_labels, dim=0).numpy()
 
     return all_mu, all_labels
@@ -375,12 +357,8 @@ def plot_latent_space(
 
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(
-        mu_2d[:, 0],
-        mu_2d[:, 1],
-        c=all_labels,
-        cmap="coolwarm",
-        alpha=0.7,
-        s=20,
+        mu_2d[:, 0], mu_2d[:, 1],
+        c=all_labels, cmap="coolwarm", alpha=0.7, s=20,
     )
     plt.xlabel("latent PC1")
     plt.ylabel("latent PC2")
@@ -402,8 +380,8 @@ def plot_latent_pca_shared_basis(
 ):
     scaler = StandardScaler()
     reference_mu_scaled = scaler.fit_transform(reference_mu)
-    ceu_mu_scaled = scaler.transform(ceu_mu)
-    yri_mu_scaled = scaler.transform(yri_mu)
+    ceu_mu_scaled       = scaler.transform(ceu_mu)
+    yri_mu_scaled       = scaler.transform(yri_mu)
 
     pca = PCA(n_components=2)
     pca.fit(reference_mu_scaled)
@@ -414,20 +392,8 @@ def plot_latent_pca_shared_basis(
     explained = pca.explained_variance_ratio_
 
     plt.figure(figsize=(7, 6))
-    plt.scatter(
-        ceu_pca[:, 0],
-        ceu_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=ceu_name,
-    )
-    plt.scatter(
-        yri_pca[:, 0],
-        yri_pca[:, 1],
-        alpha=0.7,
-        s=20,
-        label=yri_name,
-    )
+    plt.scatter(ceu_pca[:, 0], ceu_pca[:, 1], alpha=0.7, s=20, label=ceu_name)
+    plt.scatter(yri_pca[:, 0], yri_pca[:, 1], alpha=0.7, s=20, label=yri_name)
 
     plt.xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
     plt.ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
@@ -455,16 +421,18 @@ def plot_loss_curves(
     output_dir,
     train_recon_masked_losses=None,
     val_recon_masked_losses=None,
+    train_domain_losses=None,
+    train_domain_accs=None,
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
 
     plt.figure(figsize=(8, 5))
-    plt.plot(epochs, train_losses, label="train total")
-    plt.plot(epochs, val_losses, label="val total")
+    plt.plot(epochs, train_losses, label="train total (incl. domain loss if GRL)")
+    plt.plot(epochs, val_losses,   label="val VAE loss (recon + KL + pheno)")
     plt.xlabel("epoch")
     plt.ylabel("loss")
-    plt.title("Total loss")
+    plt.title("Total loss\n(train includes domain loss; val is VAE-only for early stopping)")
     plt.legend()
     plt.tight_layout()
     plt.savefig(f"{output_dir}/loss_total.png", dpi=300)
@@ -472,7 +440,7 @@ def plot_loss_curves(
 
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, train_recon_unmasked_losses, label="train recon unmasked")
-    plt.plot(epochs, val_recon_unmasked_losses, label="val recon unmasked")
+    plt.plot(epochs, val_recon_unmasked_losses,   label="val recon unmasked")
     plt.xlabel("epoch")
     plt.ylabel("recon unmasked loss")
     plt.title("Reconstruction loss (unmasked positions)")
@@ -481,11 +449,10 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_recon_unmasked.png", dpi=300)
     plt.close()
 
-    # only plot masked recon curves when masking was enabled
     if train_recon_masked_losses is not None and val_recon_masked_losses is not None:
         plt.figure(figsize=(8, 5))
         plt.plot(epochs, train_recon_masked_losses, label="train recon masked")
-        plt.plot(epochs, val_recon_masked_losses, label="val recon masked")
+        plt.plot(epochs, val_recon_masked_losses,   label="val recon masked")
         plt.xlabel("epoch")
         plt.ylabel("recon masked loss")
         plt.title("Reconstruction loss (masked positions)")
@@ -496,7 +463,7 @@ def plot_loss_curves(
 
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, train_kl_losses, label="train kl")
-    plt.plot(epochs, val_kl_losses, label="val kl")
+    plt.plot(epochs, val_kl_losses,   label="val kl")
     plt.xlabel("epoch")
     plt.ylabel("KL loss")
     plt.title("KL loss")
@@ -507,7 +474,7 @@ def plot_loss_curves(
 
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, train_pheno_losses, label="train phenotype")
-    plt.plot(epochs, val_pheno_losses, label="val phenotype")
+    plt.plot(epochs, val_pheno_losses,   label="val phenotype")
     plt.xlabel("epoch")
     plt.ylabel("phenotype loss")
     plt.title("Phenotype prediction loss")
@@ -515,6 +482,32 @@ def plot_loss_curves(
     plt.tight_layout()
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
+
+    # domain loss + accuracy curves (only when GRL was enabled)
+    if train_domain_losses is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_domain_losses, label="train domain CE")
+        plt.xlabel("epoch")
+        plt.ylabel("domain cross-entropy")
+        plt.title("Domain classification loss (training only)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/loss_domain.png", dpi=300)
+        plt.close()
+
+    if train_domain_accs is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_domain_accs, label="train domain accuracy")
+        plt.axhline(0.5, linestyle="--", color="gray", label="chance (balanced)")
+        plt.xlabel("epoch")
+        plt.ylabel("domain classifier accuracy")
+        plt.title("Domain classifier accuracy (training)\n"
+                  "Closer to 0.5 = more domain-agnostic latent space")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/domain_classifier_accuracy.png", dpi=300)
+        plt.close()
+
 
 # ------------------------------------------------------------------
 # masking diagnostic
@@ -528,19 +521,7 @@ def plot_example_input_heatmap(
     snp_start=0,
     snp_count=1000,
 ):
-    """
-    Plot heatmaps for:
-      1) original genotype input
-      2) masked genotype input
-      3) binary mask
-
-    Supports:
-      - original_x, masked_x of shape (N, 1, L) or (N, L)
-      - mask of shape (N, L) or (N, 1, L)
-
-    Assumes mask = 1 at masked positions.
-    """
-    snp_end = min(snp_start + snp_count, original_x.shape[-1])
+    snp_end        = min(snp_start + snp_count, original_x.shape[-1])
     sample_indices = list(sample_indices)
 
     def _slice_tensor(x, sample_indices, snp_start, snp_end):
@@ -551,13 +532,13 @@ def plot_example_input_heatmap(
         else:
             raise ValueError(f"Expected tensor with 2 or 3 dims, got shape {tuple(x.shape)}")
 
-    orig = _slice_tensor(original_x, sample_indices, snp_start, snp_end)
-    masked = _slice_tensor(masked_x, sample_indices, snp_start, snp_end)
-    mask_arr = _slice_tensor(mask, sample_indices, snp_start, snp_end)
+    orig     = _slice_tensor(original_x, sample_indices, snp_start, snp_end)
+    masked   = _slice_tensor(masked_x,   sample_indices, snp_start, snp_end)
+    mask_arr = _slice_tensor(mask,        sample_indices, snp_start, snp_end)
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 7), sharex=True)
 
-    im0 = axes[0].imshow(orig, aspect="auto", interpolation="nearest")
+    im0 = axes[0].imshow(orig,   aspect="auto", interpolation="nearest")
     axes[0].set_title("Original input")
     axes[0].set_ylabel("Individual")
     plt.colorbar(im0, ax=axes[0], fraction=0.02, pad=0.02)

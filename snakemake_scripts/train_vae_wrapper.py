@@ -50,7 +50,7 @@ from src.plotting import (
     plot_pheno_predictions_by_population,
     plot_pheno_residuals,
 )
-from src.train import evaluate, train_one_epoch
+from src.train import evaluate, train_one_epoch, compute_grl_lambda
 
 
 # =============================================================================
@@ -71,7 +71,8 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
             else:
                 raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
-            _, mu, _, _, _ = model(x)
+            # model now returns 6 values; ignore everything except mu
+            _, mu, _, _, _, _ = model(x)
             mu_all.append(mu.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
     return np.concatenate(mu_all, axis=0), np.concatenate(labels_all, axis=0)
@@ -214,13 +215,13 @@ def run_eval_plots(
 
 def main(
     vae_config_path: Path,
-    training_data_path: Path,       # training.npy  (CEU + YRI stacked)
-    disc_train_data_path: Path,     # discovery_train.npy  (eval only)
-    target_train_data_path: Path,   # target_train.npy     (eval only)
-    validation_data_path: Path,     # discovery_validation.npy
-    disc_train_pheno_path: Path,    # simulated_phenotype_disc_train.npy
-    target_train_pheno_path: Path,  # simulated_phenotype_target_train.npy
-    validation_pheno_path: Path,    # simulated_phenotype_disc_val.npy
+    training_data_path: Path,
+    disc_train_data_path: Path,
+    target_train_data_path: Path,
+    validation_data_path: Path,
+    disc_train_pheno_path: Path,
+    target_train_pheno_path: Path,
+    validation_pheno_path: Path,
     output_dir: Path,
 ):
     vae_config = load_vae_config(vae_config_path)
@@ -237,7 +238,7 @@ def main(
     print(f"Saving outputs to: {out.resolve()}")
 
     # ------------------------------------------------------------------
-    # hyperparameters
+    # hyperparameters — model
     # ------------------------------------------------------------------
     in_channels      = 1
     hidden_channels  = vae_config["model"]["hidden_channels"]
@@ -246,6 +247,9 @@ def main(
     padding          = int(vae_config["model"]["padding"])
     latent_dim       = int(vae_config["model"]["latent_dim"])
 
+    # ------------------------------------------------------------------
+    # hyperparameters — training
+    # ------------------------------------------------------------------
     beta             = float(vae_config["training"]["beta"])
     learning_rate    = float(vae_config["training"]["lr"])
     batch_size       = int(vae_config["training"]["batch_size"])
@@ -253,24 +257,44 @@ def main(
     patience         = int(vae_config["training"].get("patience", 500))
     min_delta        = float(vae_config["training"].get("min_delta", 1e-4))
 
-    masking          = vae_config["masking"].get("enabled", False)
-    alpha            = float(vae_config["masking"]["alpha_masked"])
-    block_length     = int(vae_config["masking"]["block_len"])
-    mask_frac        = float(vae_config["masking"]["mask_frac"])
+    # ------------------------------------------------------------------
+    # hyperparameters — masking
+    # ------------------------------------------------------------------
+    masking      = vae_config["masking"].get("enabled", False)
+    alpha        = float(vae_config["masking"]["alpha_masked"])
+    block_length = int(vae_config["masking"]["block_len"])
+    mask_frac    = float(vae_config["masking"]["mask_frac"])
 
-    pheno_hidden_dim  = vae_config["phenotype"].get("pheno_hidden_dim", None)
-    gamma             = float(vae_config["phenotype"].get("gamma", 1.0))
+    # ------------------------------------------------------------------
+    # hyperparameters — phenotype head
+    # ------------------------------------------------------------------
+    pheno_hidden_dim   = vae_config["phenotype"].get("pheno_hidden_dim", None)
+    gamma              = float(vae_config["phenotype"].get("gamma", 1.0))
     pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
 
+    # ------------------------------------------------------------------
+    # hyperparameters — domain adaptation (GRL)
+    # ------------------------------------------------------------------
+    da_cfg        = vae_config.get("domain_adaptation", {})
+    use_grl       = bool(da_cfg.get("use_grl", False))
+    raw = da_cfg.get("grl_hidden_dim", None)
+    grl_hidden_dim = int(raw) if raw is not None else None
+    grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
+    # delta = weight on domain CE loss in the total loss (before adaptive scaling)
+    delta         = float(da_cfg.get("delta", 1.0))
+
     print(f"Masking enabled: {masking}")
+    print(f"GRL enabled: {use_grl}"
+          + (f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
+             if use_grl else ""))
 
     # ------------------------------------------------------------------
     # load genotypes
     # ------------------------------------------------------------------
-    training_dataset   = np.load(training_data_path)    # CEU + YRI stacked
-    disc_train_dataset = np.load(disc_train_data_path)  # CEU only  (eval)
-    target_train_dataset = np.load(target_train_data_path)  # YRI only (eval)
-    validation_dataset = np.load(validation_data_path)  # CEU val
+    training_dataset     = np.load(training_data_path)
+    disc_train_dataset   = np.load(disc_train_data_path)
+    target_train_dataset = np.load(target_train_data_path)
+    validation_dataset   = np.load(validation_data_path)
 
     n_disc_train   = disc_train_dataset.shape[0]
     n_target_train = target_train_dataset.shape[0]
@@ -283,7 +307,6 @@ def main(
 
     # ------------------------------------------------------------------
     # load + normalise phenotypes
-    # Standardise using CEU discovery_train mean/std ONLY
     # ------------------------------------------------------------------
     disc_train_pheno   = np.load(disc_train_pheno_path).astype(np.float32)
     target_train_pheno = np.load(target_train_pheno_path).astype(np.float32)
@@ -297,7 +320,6 @@ def main(
     target_train_pheno_norm = (target_train_pheno - train_mean) / train_std
     validation_pheno_norm   = (validation_pheno   - train_mean) / train_std
 
-    # stacked training pheno: CEU rows real, YRI rows zeroed (masked in loss via pop_label)
     training_pheno_norm = np.concatenate(
         [disc_train_pheno_norm, np.zeros(n_target_train, dtype=np.float32)], axis=0
     )
@@ -308,33 +330,30 @@ def main(
     masker = Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
 
     # ------------------------------------------------------------------
-    # build TRAINING tensors + loader
-    # pop_label: 0 = CEU (phenotype loss active), 1 = YRI (phenotype loss masked)
-    # Tuple order: (x, pheno, pop_label)
+    # training loader  (CEU + YRI stacked, shuffled)
+    # Tuple: (x, pheno, pop_label)   pop_label: 0=CEU, 1=YRI
     # ------------------------------------------------------------------
-    training_geno_t  = torch.tensor(training_dataset,       dtype=torch.float32).unsqueeze(1)
-    training_pheno_t = torch.tensor(training_pheno_norm,    dtype=torch.float32).unsqueeze(1)
+    training_geno_t  = torch.tensor(training_dataset,    dtype=torch.float32).unsqueeze(1)
+    training_pheno_t = torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(1)
     training_pop_t   = torch.cat([
-        torch.zeros(n_disc_train,   dtype=torch.long),
-        torch.ones(n_target_train,  dtype=torch.long),
+        torch.zeros(n_disc_train,  dtype=torch.long),
+        torch.ones(n_target_train, dtype=torch.long),
     ])
 
     train_ds     = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     # ------------------------------------------------------------------
-    # build EVALUATION loaders (no gradient updates, plots only)
-    # Tuple order: (input_x, original_x, pheno, mask, pop_label)
+    # evaluation loaders (plots only, no gradient updates)
+    # Tuple: (input_x, original_x, pheno, mask, pop_label)
     # ------------------------------------------------------------------
     disc_train_loader = make_eval_loader(
         geno=disc_train_dataset,
         pheno_norm=disc_train_pheno_norm,
         pop_label_value=0,
         batch_size=batch_size,
-        masker=masker,
-        masking=masking,
-        out_dir=out,
-        split_name="discovery_train",
+        masker=masker, masking=masking,
+        out_dir=out, split_name="discovery_train",
     )
 
     target_train_loader = make_eval_loader(
@@ -342,10 +361,8 @@ def main(
         pheno_norm=target_train_pheno_norm,
         pop_label_value=1,
         batch_size=batch_size,
-        masker=masker,
-        masking=masking,
-        out_dir=out,
-        split_name="target_train",
+        masker=masker, masking=masking,
+        out_dir=out, split_name="target_train",
     )
 
     val_loader = make_eval_loader(
@@ -353,17 +370,15 @@ def main(
         pheno_norm=validation_pheno_norm,
         pop_label_value=0,
         batch_size=batch_size,
-        masker=masker,
-        masking=masking,
-        out_dir=out,
-        split_name="discovery_validation",
+        masker=masker, masking=masking,
+        out_dir=out, split_name="discovery_validation",
     )
 
     # ------------------------------------------------------------------
-    # diagnostic heatmap (validation)
+    # diagnostic heatmap
     # ------------------------------------------------------------------
     val_geno_t  = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
-    val_input_x = next(iter(val_loader))[0]  # masked or unmasked input
+    val_input_x = next(iter(val_loader))[0]
     val_mask    = next(iter(val_loader))[3]
 
     plot_example_input_heatmap(
@@ -394,16 +409,23 @@ def main(
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=pheno_hidden_dim,
+        use_grl=use_grl,
+        grl_hidden_dim=grl_hidden_dim,
+        num_domains=2,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # shape trace
+    # shape trace — model now returns 6 values
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
-        logits, mu, logvar, z, pheno_pred = model(x_batch, verbose=True)
+        logits, mu, logvar, z, pheno_pred, domain_logits = model(x_batch, verbose=True)
+    if domain_logits is not None:
+        print(f"domain_logits: {domain_logits.shape}")
 
-    # optimizer
+    # ------------------------------------------------------------------
+    # optimizer  (separate weight-decay for pheno head)
+    # ------------------------------------------------------------------
     pheno_head_params = set(model.pheno_head.parameters())
     other_params      = [p for p in model.parameters() if p not in pheno_head_params]
     optimizer = torch.optim.Adam([
@@ -412,11 +434,13 @@ def main(
     ], lr=learning_rate)
 
     # ------------------------------------------------------------------
-    # training state
+    # training-history accumulators
     # ------------------------------------------------------------------
     train_loss_list, train_recon_unmasked_list = [], []
     train_recon_masked_list, train_kl_list     = [], []
     train_phenotype_loss_list                  = []
+    train_domain_loss_list                     = []
+    train_domain_acc_list                      = []
 
     val_loss_list, val_recon_unmasked_list     = [], []
     val_recon_masked_list, val_kl_list         = [], []
@@ -428,14 +452,20 @@ def main(
     epochs_without_improvement = 0
     best_epoch                 = 0
 
-    if masking:
-        masker = Masker(block_length=block_length, mask_fraction=mask_frac)
-
     # ------------------------------------------------------------------
     # training loop
     # ------------------------------------------------------------------
     for epoch in range(num_epochs):
-        train_loss, train_recon_unmasked, train_recon_masked, train_kl, train_pheno = train_one_epoch(
+
+        # Update GRL reversal strength each epoch (Ganin schedule)
+        if use_grl:
+            grl_lam = compute_grl_lambda(epoch, num_epochs, lambda_max=grl_lambda_max)
+            model.set_grl_lambda(grl_lam)
+        else:
+            grl_lam = 0.0
+
+        (train_loss, train_recon_unmasked, train_recon_masked,
+         train_kl, train_pheno, train_domain, train_d_acc) = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -445,6 +475,8 @@ def main(
             beta=beta,
             alpha=alpha,
             gamma=gamma,
+            use_grl=use_grl,
+            delta=delta,
         )
 
         val_loss, val_recon_unmasked, val_recon_masked, val_kl, val_pheno = evaluate(
@@ -464,11 +496,14 @@ def main(
             + gamma * val_pheno
         )
 
+        # accumulate
         train_loss_list.append(train_loss)
         train_recon_unmasked_list.append(train_recon_unmasked)
         train_recon_masked_list.append(train_recon_masked)
         train_kl_list.append(train_kl)
         train_phenotype_loss_list.append(train_pheno)
+        train_domain_loss_list.append(train_domain)
+        train_domain_acc_list.append(train_d_acc)
 
         val_loss_list.append(val_loss)
         val_recon_unmasked_list.append(val_recon_unmasked)
@@ -476,11 +511,15 @@ def main(
         val_kl_list.append(val_kl)
         val_phenotype_loss_list.append(val_pheno)
 
+        grl_str = (f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
+                   f"  domain_acc={train_d_acc:.3f}") if use_grl else ""
+
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
             f"train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
             f"train_recon={train_recon_unmasked:.6f} | train_pheno={train_pheno:.6f} | "
             f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
+            + grl_str
         )
 
         if val_stop_metric < (best_val_stop_metric - min_delta):
@@ -521,19 +560,23 @@ def main(
     # ------------------------------------------------------------------
     # save training history
     # ------------------------------------------------------------------
-    np.savez(
-        out / "training_history.npz",
-        train_losses=np.array(train_loss_list),
-        val_losses=np.array(val_loss_list),
-        train_recon_unmasked_losses=np.array(train_recon_unmasked_list),
-        val_recon_unmasked_losses=np.array(val_recon_unmasked_list),
-        train_kl_losses=np.array(train_kl_list),
-        val_kl_losses=np.array(val_kl_list),
-        train_phenotype_losses=np.array(train_phenotype_loss_list),
-        val_phenotype_losses=np.array(val_phenotype_loss_list),
-        train_recon_masked_losses=np.array(train_recon_masked_list),
-        val_recon_masked_losses=np.array(val_recon_masked_list),
+    history_dict = dict(
+        train_losses                 = np.array(train_loss_list),
+        val_losses                   = np.array(val_loss_list),
+        train_recon_unmasked_losses  = np.array(train_recon_unmasked_list),
+        val_recon_unmasked_losses    = np.array(val_recon_unmasked_list),
+        train_kl_losses              = np.array(train_kl_list),
+        val_kl_losses                = np.array(val_kl_list),
+        train_phenotype_losses       = np.array(train_phenotype_loss_list),
+        val_phenotype_losses         = np.array(val_phenotype_loss_list),
+        train_recon_masked_losses    = np.array(train_recon_masked_list),
+        val_recon_masked_losses      = np.array(val_recon_masked_list),
     )
+    if use_grl:
+        history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
+        history_dict["train_domain_acc"]    = np.array(train_domain_acc_list)
+
+    np.savez(out / "training_history.npz", **history_dict)
 
     plot_loss_curves(
         train_losses=train_loss_list,
@@ -546,6 +589,8 @@ def main(
         val_pheno_losses=val_phenotype_loss_list,
         train_recon_masked_losses=train_recon_masked_list if masking else None,
         val_recon_masked_losses=val_recon_masked_list     if masking else None,
+        train_domain_losses=train_domain_loss_list if use_grl else None,
+        train_domain_accs=train_domain_acc_list    if use_grl else None,
         output_dir=out,
     )
 
@@ -588,7 +633,7 @@ def main(
     # ------------------------------------------------------------------
     # shared-coordinate latent PCA across all three splits
     # ------------------------------------------------------------------
-    disc_train_mu, _ = extract_mu(model, disc_train_loader,   device, use_masked_input=use_masked)
+    disc_train_mu, _   = extract_mu(model, disc_train_loader,   device, use_masked_input=use_masked)
     target_train_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
     val_mu, _          = extract_mu(model, val_loader,          device, use_masked_input=use_masked)
 
@@ -612,20 +657,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Train ConvVAE on mixed CEU+YRI genotypes; evaluate per population."
     )
     p.add_argument("--vae-config",           type=Path, required=True)
-    p.add_argument("--training-data",        type=Path, required=True,
-                   help="Stacked CEU+YRI genotypes: training.npy")
-    p.add_argument("--disc-train-data",      type=Path, required=True,
-                   help="CEU-only training genotypes: discovery_train.npy (eval only)")
-    p.add_argument("--target-train-data",    type=Path, required=True,
-                   help="YRI-only training genotypes: target_train.npy (eval only)")
-    p.add_argument("--validation-data",      type=Path, required=True,
-                   help="CEU validation genotypes: discovery_validation.npy")
-    p.add_argument("--disc-train-pheno",     type=Path, required=True,
-                   help="CEU training phenotypes: simulated_phenotype_disc_train.npy")
-    p.add_argument("--target-train-pheno",   type=Path, required=True,
-                   help="YRI training phenotypes: simulated_phenotype_target_train.npy")
-    p.add_argument("--validation-pheno",     type=Path, required=True,
-                   help="CEU validation phenotypes: simulated_phenotype_disc_val.npy")
+    p.add_argument("--training-data",        type=Path, required=True)
+    p.add_argument("--disc-train-data",      type=Path, required=True)
+    p.add_argument("--target-train-data",    type=Path, required=True)
+    p.add_argument("--validation-data",      type=Path, required=True)
+    p.add_argument("--disc-train-pheno",     type=Path, required=True)
+    p.add_argument("--target-train-pheno",   type=Path, required=True)
+    p.add_argument("--validation-pheno",     type=Path, required=True)
     p.add_argument("--outputs",              type=Path, required=True)
     return p
 

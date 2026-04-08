@@ -1,6 +1,41 @@
 import torch
 import torch.nn as nn
+from torch.autograd import Function
 
+
+# =============================================================================
+# Gradient Reversal
+# =============================================================================
+
+class GradientReversalFunction(Function):
+    @staticmethod
+    def forward(ctx, x, lambda_):
+        ctx.save_for_backward(torch.tensor(lambda_))
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (lambda_,) = ctx.saved_tensors
+        return -lambda_.item() * grad_output, None
+
+
+class GradientReversalLayer(nn.Module):
+    """Scales gradients by -lambda_ during the backward pass."""
+
+    def __init__(self, lambda_: float = 1.0):
+        super().__init__()
+        self.lambda_ = lambda_
+
+    def forward(self, x):
+        return GradientReversalFunction.apply(x, self.lambda_)
+
+    def set_lambda(self, lambda_: float):
+        self.lambda_ = lambda_
+
+
+# =============================================================================
+# ConvVAE
+# =============================================================================
 
 class ConvVAE(nn.Module):
     def __init__(
@@ -17,6 +52,10 @@ class ConvVAE(nn.Module):
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=None,
+        # --- domain adaptation ---
+        use_grl: bool = False,
+        grl_hidden_dim: int = 256,
+        num_domains: int = 2,
     ):
         super().__init__()
 
@@ -30,8 +69,12 @@ class ConvVAE(nn.Module):
         self.num_classes = num_classes
         self.use_batchnorm = use_batchnorm
         self.activation = activation
+        self.use_grl = use_grl
         self.encoder_lengths = [input_length]
 
+        # ------------------------------------------------------------------
+        # Encoder
+        # ------------------------------------------------------------------
         enc_layers = []
         current_in = in_channels
         current_length = input_length
@@ -46,17 +89,11 @@ class ConvVAE(nn.Module):
                     padding=padding,
                 )
             )
-
             if use_batchnorm:
                 enc_layers.append(nn.BatchNorm1d(current_out))
-
             enc_layers.append(self._get_activation())
-
             current_length = self.compute_conv1d_output_length(
-                current_length,
-                kernel_size,
-                stride,
-                padding,
+                current_length, kernel_size, stride, padding
             )
             self.encoder_lengths.append(current_length)
             current_in = current_out
@@ -67,11 +104,13 @@ class ConvVAE(nn.Module):
         self.final_length = current_length
         self.flat_dim = self.final_channels * self.final_length
 
-        self.fc_mu = nn.Linear(self.flat_dim, latent_dim)
+        self.fc_mu     = nn.Linear(self.flat_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
-        # phenotype head
+        # ------------------------------------------------------------------
+        # Phenotype head
+        # ------------------------------------------------------------------
         if pheno_hidden_dim is None:
             self.pheno_head = nn.Linear(latent_dim, pheno_dim)
         else:
@@ -81,21 +120,37 @@ class ConvVAE(nn.Module):
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
 
+        # ------------------------------------------------------------------
+        # Domain classifier (with GRL)
+        # ------------------------------------------------------------------
+        if use_grl:
+            self.grl = GradientReversalLayer(lambda_=1.0)
+            if grl_hidden_dim is None:
+                self.domain_classifier = nn.Linear(latent_dim, num_domains)
+            else:
+                self.domain_classifier = nn.Sequential(
+                    nn.Linear(latent_dim, grl_hidden_dim),
+                    self._get_activation(),
+                    nn.Linear(grl_hidden_dim, num_domains),
+                )
+        else:
+            self.grl = None
+            self.domain_classifier = None
+
+        # ------------------------------------------------------------------
+        # Decoder
+        # ------------------------------------------------------------------
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
-        target_lengths = list(reversed(self.encoder_lengths[:-1]))
-        current_in = decoder_channels[0]
-        current_length = self.encoder_lengths[-1]
+        target_lengths   = list(reversed(self.encoder_lengths[:-1]))
+        current_in       = decoder_channels[0]
+        current_length   = self.encoder_lengths[-1]
 
         for i, target_length in enumerate(target_lengths):
-            is_last = i == len(target_lengths) - 1
+            is_last    = i == len(target_lengths) - 1
+            current_out = decoder_channels[i + 1] if not is_last else num_classes
 
-            if not is_last:
-                current_out = decoder_channels[i + 1]
-            else:
-                current_out = num_classes
-
-            base_length = (current_length - 1) * stride - 2 * padding + kernel_size
+            base_length    = (current_length - 1) * stride - 2 * padding + kernel_size
             output_padding = target_length - base_length
 
             if output_padding not in [0, 1]:
@@ -114,16 +169,19 @@ class ConvVAE(nn.Module):
                     output_padding=output_padding,
                 )
             )
-
             if not is_last:
                 if use_batchnorm:
                     dec_layers.append(nn.BatchNorm1d(current_out))
                 dec_layers.append(self._get_activation())
 
-            current_in = current_out
+            current_in     = current_out
             current_length = target_length
 
         self.decoder = nn.Sequential(*dec_layers)
+
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
 
     def _get_activation(self):
         if self.activation == "elu":
@@ -145,7 +203,26 @@ class ConvVAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
+    def set_grl_lambda(self, lambda_: float):
+        """Update the GRL reversal strength. Call this each epoch from the training loop."""
+        if self.grl is not None:
+            self.grl.set_lambda(lambda_)
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
     def forward(self, x, verbose=False):
+        """
+        Returns
+        -------
+        out          : (B, num_classes, L)  decoder logits
+        mu           : (B, latent_dim)
+        logvar       : (B, latent_dim)
+        z            : (B, latent_dim)
+        pheno_pred   : (B, 1)
+        domain_logits: (B, num_domains) if use_grl else None
+        """
         if verbose:
             print(f"Input: {x.shape}")
 
@@ -159,19 +236,25 @@ class ConvVAE(nn.Module):
         if verbose:
             print(f"Flattened: {h_flat.shape}")
 
-        mu = self.fc_mu(h_flat)
+        mu     = self.fc_mu(h_flat)
         logvar = self.fc_logvar(h_flat)
         logvar = torch.clamp(logvar, min=-6.0, max=6.0)
+        z      = self.reparameterize(mu, logvar)
 
-        z = self.reparameterize(mu, logvar)
+        # Phenotype prediction from mu (deterministic path)
+        pheno_pred = self.pheno_head(mu)
 
-        # phenotype prediction from latent
-        pheno_pred = self.pheno_head(mu)   # or self.pheno_head(z)
+        # Domain classification through reversed gradients
+        if self.use_grl:
+            z_rev         = self.grl(mu)          # gradient sign flipped here
+            domain_logits = self.domain_classifier(z_rev)
+        else:
+            domain_logits = None
 
+        # Decoder
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
-
-        out = h_dec
+        out   = h_dec
         for i, layer in enumerate(self.decoder):
             out = layer(out)
             if verbose:
@@ -180,7 +263,8 @@ class ConvVAE(nn.Module):
         expected_shape = (x.size(0), self.num_classes, x.size(2))
         if out.shape != expected_shape:
             raise ValueError(
-                f"Decoder output shape {out.shape} does not match expected logits shape {expected_shape}"
+                f"Decoder output shape {out.shape} does not match "
+                f"expected logits shape {expected_shape}"
             )
 
-        return out, mu, logvar, z, pheno_pred
+        return out, mu, logvar, z, pheno_pred, domain_logits

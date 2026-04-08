@@ -28,7 +28,7 @@ masking:
   use_mask_channel: true
   alpha_masked: 0.0
   mode: "contiguous"
-  constraint_mode: "frac_and_len" # frac_and_blocks, frac_and_len, block_and_len
+  constraint_mode: "frac_and_len"
   n_blocks: null
   allow_overlap: false
   mask_frac: 0.1
@@ -42,23 +42,37 @@ phenotype:
   gamma: 0.60
   pheno_weight_decay: 0.0
 
+# -------------------------------------------------------------------
+# Domain adaptation via Gradient Reversal Layer (DANN-style)
+# -------------------------------------------------------------------
+# use_grl      : enable/disable the entire domain adaptation pathway
+# grl_hidden_dim: hidden units in the domain classifier MLP
+# lambda_max   : ceiling for the Ganin et al. reversal schedule
+#                  lambda(p) = lambda_max * (2/(1+exp(-10*p)) - 1)
+#                where p = epoch / max_epochs  (ramps 0 → lambda_max)
+# delta        : base weight on the domain CE loss in the total loss.
+#                The actual weight applied each batch is:
+#                  effective_delta = delta * domain_accuracy
+#                so the encoder is pushed hardest when the classifier
+#                is most accurate (latent space still domain-separable).
+# -------------------------------------------------------------------
+domain_adaptation:
+  use_grl: true
+  grl_hidden_dim: null
+  lambda_max: 1.0
+  delta: 1.0
+
 seed: 0
 
 grid:
-  enabled: false
+  enabled: true
   name:
-    prefix: "vae_gamma"
+    prefix: "vae_grl"
     sep: "__"
   dims:
-    # - path: "phenotype.weight_decay"
-    #   values: [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
-    #   tag: "weightdecay_pheno"
-    # - path: "model.latent_dim"
-    #   values: [8, 16, 32, 64, 128, 256]
-    #   tag: "latdim"
-    - path: "phenotype.gamma"
-      values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
-      tag: "gamma"
-
-
-  
+    # - path: "phenotype.gamma"
+    #   values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
+    #   tag: "gamma"
+    - path: "domain_adaptation.lambda_max"
+      values: [0.0, 0.25, 0.5, 0.75, 1.0]
+      tag: "lambda_max"
