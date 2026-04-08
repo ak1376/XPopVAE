@@ -1,6 +1,7 @@
 model:
   model_type: "fully_conv"
-  latent_dim: 512
+  latent_dim_shared: 256      # domain-invariant subspace (GRL + pheno head)
+  latent_dim_private: 256     # population-specific subspace (decoder only)
   hidden_channels: [32, 64, 128, 256, 256, 256]
   kernel_size: 17
   stride: 2
@@ -14,14 +15,10 @@ training:
   beta: 0.07
   weight_decay: 0.0
   gradient_clip_val: 1.0
-  precision: "32-true"
+  patience: 40
+  min_delta: 1e-4
   log_every_n_steps: 10
   num_workers: 0
-  overfit_one_batch: false
-  overfit_n: 64
-  compute_clean_metrics_train: true
-  compute_clean_metrics_val: true
-  patience: 40
 
 masking:
   enabled: false
@@ -43,18 +40,11 @@ phenotype:
   pheno_weight_decay: 0.0
 
 # -------------------------------------------------------------------
-# Domain adaptation via Gradient Reversal Layer (DANN-style)
+# Domain adaptation (GRL on shared subspace only)
 # -------------------------------------------------------------------
-# use_grl      : enable/disable the entire domain adaptation pathway
-# grl_hidden_dim: hidden units in the domain classifier MLP
-# lambda_max   : ceiling for the Ganin et al. reversal schedule
-#                  lambda(p) = lambda_max * (2/(1+exp(-10*p)) - 1)
-#                where p = epoch / max_epochs  (ramps 0 → lambda_max)
-# delta        : base weight on the domain CE loss in the total loss.
-#                The actual weight applied each batch is:
-#                  effective_delta = delta * domain_accuracy
-#                so the encoder is pushed hardest when the classifier
-#                is most accurate (latent space still domain-separable).
+# grl_hidden_dim: null → single linear classifier (recommended starting point)
+# lambda_max     : Ganin schedule ceiling; ramps 0 → lambda_max over training
+# delta          : base weight on domain CE; effective = delta * domain_acc
 # -------------------------------------------------------------------
 domain_adaptation:
   use_grl: true
@@ -65,14 +55,11 @@ domain_adaptation:
 seed: 0
 
 grid:
-  enabled: true
+  enabled: false
   name:
-    prefix: "vae_grl"
+    prefix: "vae"
     sep: "__"
   dims:
-    # - path: "phenotype.gamma"
-    #   values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
-    #   tag: "gamma"
-    - path: "domain_adaptation.lambda_max"
-      values: [0.0, 0.25, 0.5, 0.75, 1.0]
-      tag: "lambda_max"
+    - path: "phenotype.gamma"
+      values: [0.0, 0.30, 0.60, 1.0]
+      tag: "gamma"

@@ -10,29 +10,6 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, TensorDataset
 
-"""
-Inputs:
-    --vae-config                : YAML config for the VAE
-    --training-data             : stacked CEU+YRI genotypes  (training.npy)
-    --disc-train-data           : CEU-only training genotypes (discovery_train.npy)  [eval only]
-    --target-train-data         : YRI-only training genotypes (target_train.npy)     [eval only]
-    --validation-data           : CEU validation genotypes   (discovery_validation.npy)
-    --disc-train-pheno          : CEU training phenotypes    (simulated_phenotype_disc_train.npy)
-    --target-train-pheno        : YRI training phenotypes    (simulated_phenotype_target_train.npy)
-    --validation-pheno          : CEU validation phenotypes  (simulated_phenotype_disc_val.npy)
-    --outputs                   : root output directory
-
-Training loader  : training.npy  (CEU + YRI mixed, shuffled)
-                   phenotype loss masked to CEU rows only (pop_label == 0)
-Evaluation loaders (plots + metrics only, no gradient updates):
-    discovery_train/  <- discovery_train.npy
-    target_train/     <- target_train.npy
-    discovery_validation/ <- discovery_validation.npy
-"""
-
-# ------------------------------------------------------------------
-# project paths & local imports
-# ------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -49,6 +26,7 @@ from src.plotting import (
     plot_pheno_predictions,
     plot_pheno_predictions_by_population,
     plot_pheno_residuals,
+    extract_mu_shared,
 )
 from src.train import evaluate, train_one_epoch, compute_grl_lambda
 
@@ -57,25 +35,10 @@ from src.train import evaluate, train_one_epoch, compute_grl_lambda
 # Helpers
 # =============================================================================
 
-def extract_mu(model, dataloader, device, use_masked_input=False):
-    model.eval()
-    mu_all, labels_all = [], []
-    with torch.no_grad():
-        for batch in dataloader:
-            if len(batch) == 3:
-                x = batch[0]
-                pop_label = batch[-1]
-            elif len(batch) == 5:
-                x = batch[0] if use_masked_input else batch[1]
-                pop_label = batch[-1]
-            else:
-                raise ValueError(f"Unexpected batch length {len(batch)}")
-            x = x.to(device)
-            # model now returns 6 values; ignore everything except mu
-            _, mu, _, _, _, _ = model(x)
-            mu_all.append(mu.cpu().numpy())
-            labels_all.append(pop_label.cpu().numpy())
-    return np.concatenate(mu_all, axis=0), np.concatenate(labels_all, axis=0)
+def extract_mu_for_pca(model, dataloader, device, use_masked_input=False):
+    """Return concatenated [mu_shared | mu_private] for shared-basis PCA."""
+    from src.plotting import extract_mu
+    return extract_mu(model, dataloader, device, use_masked_input)
 
 
 def load_vae_config(path: Path) -> dict:
@@ -86,31 +49,19 @@ def load_vae_config(path: Path) -> dict:
 def save_checkpoint(path, model, optimizer, epoch, val_loss, vae_config, input_length):
     torch.save(
         {
-            "epoch": epoch,
-            "val_loss": val_loss,
-            "model_state_dict": model.state_dict(),
+            "epoch":              epoch,
+            "val_loss":           val_loss,
+            "model_state_dict":   model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "vae_config": vae_config,
-            "input_length": input_length,
+            "vae_config":         vae_config,
+            "input_length":       input_length,
         },
         path,
     )
 
 
-def make_eval_loader(
-    geno: np.ndarray,
-    pheno_norm: np.ndarray,
-    pop_label_value: int,
-    batch_size: int,
-    masker,
-    masking: bool,
-    out_dir: Path,
-    split_name: str,
-):
-    """
-    Build a val-style TensorDataset/DataLoader for one evaluation split.
-    Tuple order: (input_x, original_x, pheno, mask, pop_label)
-    """
+def make_eval_loader(geno, pheno_norm, pop_label_value, batch_size,
+                     masker, masking, out_dir, split_name):
     geno_t  = torch.tensor(geno,       dtype=torch.float32).unsqueeze(1)
     pheno_t = torch.tensor(pheno_norm, dtype=torch.float32).unsqueeze(1)
 
@@ -123,65 +74,36 @@ def make_eval_loader(
         mask    = torch.zeros(geno_t.shape[0], geno_t.shape[2], dtype=torch.bool)
 
     pop_labels = torch.full((len(geno_t),), pop_label_value, dtype=torch.long)
-
-    ds     = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-    return loader
+    ds         = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
+    return DataLoader(ds, batch_size=batch_size, shuffle=False)
 
 
-def run_eval_plots(
-    model,
-    loader,
-    device,
-    out_dir: Path,
-    split_name: str,
-    use_masked: bool,
-    loss_fn,
-    alpha: float,
-    beta: float,
-    gamma: float,
-):
-    """
-    Run a full evaluation pass for one split and save all plots + metrics
-    into out_dir/split_name/.
-    """
+def run_eval_plots(model, loader, device, out_dir, split_name,
+                   use_masked, loss_fn, alpha, beta, gamma):
     split_dir = out_dir / split_name
     split_dir.mkdir(parents=True, exist_ok=True)
 
-    loss, recon_unmasked, recon_masked, kl, pheno_loss = evaluate(
-        model=model,
-        dataloader=loader,
-        device=device,
-        loss_fn=loss_fn,
-        alpha=alpha,
-        beta=beta,
-        gamma=gamma,
+    loss, recon_u, recon_m, kl, pheno_l = evaluate(
+        model=model, dataloader=loader, device=device,
+        loss_fn=loss_fn, alpha=alpha, beta=beta, gamma=gamma,
     )
-    print(f"\n[{split_name}] loss={loss:.6f}  recon={recon_unmasked:.6f}  "
-          f"kl={kl:.6f}  pheno_loss={pheno_loss:.6f}")
+    print(f"\n[{split_name}] loss={loss:.6f}  recon={recon_u:.6f}  "
+          f"kl={kl:.6f}  pheno={pheno_l:.6f}")
 
     recon_metrics = plot_reconstruction(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_dir=split_dir,
-        use_masked_input=use_masked,
+        model=model, dataloader=loader, device=device,
+        output_dir=split_dir, use_masked_input=use_masked,
     )
     print(f"[{split_name}] balanced_accuracy={recon_metrics['balanced_accuracy']:.6f}")
 
     plot_latent_space(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_dir=split_dir,
-        save_path="latent_space.png",
+        model=model, dataloader=loader, device=device,
+        output_dir=split_dir, save_path="latent_space.png",
         use_masked_input=use_masked,
     )
 
     pheno_metrics = plot_pheno_predictions(
-        model=model,
-        dataloader=loader,
-        device=device,
+        model=model, dataloader=loader, device=device,
         output_path=split_dir / f"pheno_pred_vs_true_{split_name}.png",
         use_masked_input=use_masked,
         title=f"{split_name} phenotype prediction",
@@ -189,18 +111,14 @@ def run_eval_plots(
     print(f"[{split_name}] pheno RMSE={pheno_metrics['rmse']:.6f}  R²={pheno_metrics['r2']:.6f}")
 
     plot_pheno_predictions_by_population(
-        model=model,
-        dataloader=loader,
-        device=device,
+        model=model, dataloader=loader, device=device,
         output_path=split_dir / f"pheno_pred_vs_true_{split_name}_by_pop.png",
         use_masked_input=use_masked,
         title=f"{split_name} phenotype prediction by population",
     )
 
     plot_pheno_residuals(
-        model=model,
-        dataloader=loader,
-        device=device,
+        model=model, dataloader=loader, device=device,
         output_path=split_dir / f"pheno_residuals_{split_name}.png",
         use_masked_input=use_masked,
         title=f"{split_name} phenotype residuals",
@@ -214,21 +132,13 @@ def run_eval_plots(
 # =============================================================================
 
 def main(
-    vae_config_path: Path,
-    training_data_path: Path,
-    disc_train_data_path: Path,
-    target_train_data_path: Path,
-    validation_data_path: Path,
-    disc_train_pheno_path: Path,
-    target_train_pheno_path: Path,
-    validation_pheno_path: Path,
-    output_dir: Path,
+    vae_config_path, training_data_path, disc_train_data_path,
+    target_train_data_path, validation_data_path,
+    disc_train_pheno_path, target_train_pheno_path, validation_pheno_path,
+    output_dir,
 ):
     vae_config = load_vae_config(vae_config_path)
 
-    # ------------------------------------------------------------------
-    # output directories
-    # ------------------------------------------------------------------
     out            = output_dir / "vae_outputs"
     checkpoint_dir = out / "checkpoints"
     plots_dir      = out / "plots"
@@ -238,18 +148,18 @@ def main(
     print(f"Saving outputs to: {out.resolve()}")
 
     # ------------------------------------------------------------------
-    # hyperparameters — model
+    # Hyperparameters
     # ------------------------------------------------------------------
-    in_channels      = 1
-    hidden_channels  = vae_config["model"]["hidden_channels"]
-    kernel_size      = int(vae_config["model"]["kernel_size"])
-    stride           = int(vae_config["model"]["stride"])
-    padding          = int(vae_config["model"]["padding"])
-    latent_dim       = int(vae_config["model"]["latent_dim"])
+    in_channels     = 1
+    hidden_channels = vae_config["model"]["hidden_channels"]
+    kernel_size     = int(vae_config["model"]["kernel_size"])
+    stride          = int(vae_config["model"]["stride"])
+    padding         = int(vae_config["model"]["padding"])
 
-    # ------------------------------------------------------------------
-    # hyperparameters — training
-    # ------------------------------------------------------------------
+    # Split latent dims
+    latent_dim_shared  = int(vae_config["model"]["latent_dim_shared"])
+    latent_dim_private = int(vae_config["model"]["latent_dim_private"])
+
     beta             = float(vae_config["training"]["beta"])
     learning_rate    = float(vae_config["training"]["lr"])
     batch_size       = int(vae_config["training"]["batch_size"])
@@ -257,39 +167,30 @@ def main(
     patience         = int(vae_config["training"].get("patience", 500))
     min_delta        = float(vae_config["training"].get("min_delta", 1e-4))
 
-    # ------------------------------------------------------------------
-    # hyperparameters — masking
-    # ------------------------------------------------------------------
     masking      = vae_config["masking"].get("enabled", False)
     alpha        = float(vae_config["masking"]["alpha_masked"])
     block_length = int(vae_config["masking"]["block_len"])
     mask_frac    = float(vae_config["masking"]["mask_frac"])
 
-    # ------------------------------------------------------------------
-    # hyperparameters — phenotype head
-    # ------------------------------------------------------------------
     pheno_hidden_dim   = vae_config["phenotype"].get("pheno_hidden_dim", None)
     gamma              = float(vae_config["phenotype"].get("gamma", 1.0))
     pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
 
-    # ------------------------------------------------------------------
-    # hyperparameters — domain adaptation (GRL)
-    # ------------------------------------------------------------------
-    da_cfg        = vae_config.get("domain_adaptation", {})
-    use_grl       = bool(da_cfg.get("use_grl", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
-    grl_hidden_dim = int(raw) if raw is not None else None
+    da_cfg         = vae_config.get("domain_adaptation", {})
+    use_grl        = bool(da_cfg.get("use_grl", False))
+    raw_hidden     = da_cfg.get("grl_hidden_dim", None)
+    grl_hidden_dim = int(raw_hidden) if raw_hidden is not None else None
     grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
-    # delta = weight on domain CE loss in the total loss (before adaptive scaling)
-    delta         = float(da_cfg.get("delta", 1.0))
+    delta          = float(da_cfg.get("delta", 1.0))
 
     print(f"Masking enabled: {masking}")
+    print(f"Latent split: shared={latent_dim_shared}  private={latent_dim_private}")
     print(f"GRL enabled: {use_grl}"
-          + (f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
+          + (f"  lambda_max={grl_lambda_max}  hidden={grl_hidden_dim}  delta={delta}"
              if use_grl else ""))
 
     # ------------------------------------------------------------------
-    # load genotypes
+    # Data
     # ------------------------------------------------------------------
     training_dataset     = np.load(training_data_path)
     disc_train_dataset   = np.load(disc_train_data_path)
@@ -298,101 +199,62 @@ def main(
 
     n_disc_train   = disc_train_dataset.shape[0]
     n_target_train = target_train_dataset.shape[0]
-    assert n_disc_train + n_target_train == training_dataset.shape[0], (
-        f"training.npy rows ({training_dataset.shape[0]}) != "
-        f"discovery_train ({n_disc_train}) + target_train ({n_target_train})"
-    )
+    assert n_disc_train + n_target_train == training_dataset.shape[0]
 
     input_length = training_dataset.shape[-1]
 
-    # ------------------------------------------------------------------
-    # load + normalise phenotypes
-    # ------------------------------------------------------------------
     disc_train_pheno   = np.load(disc_train_pheno_path).astype(np.float32)
     target_train_pheno = np.load(target_train_pheno_path).astype(np.float32)
     validation_pheno   = np.load(validation_pheno_path).astype(np.float32)
 
     train_mean = disc_train_pheno.mean()
     train_std  = disc_train_pheno.std()
-    print(f"Phenotype normalisation — mean={train_mean:.4f}  std={train_std:.4f}  (CEU disc_train only)")
+    print(f"Phenotype normalisation — mean={train_mean:.4f}  std={train_std:.4f}")
 
     disc_train_pheno_norm   = (disc_train_pheno   - train_mean) / train_std
     target_train_pheno_norm = (target_train_pheno - train_mean) / train_std
     validation_pheno_norm   = (validation_pheno   - train_mean) / train_std
-
-    training_pheno_norm = np.concatenate(
+    training_pheno_norm     = np.concatenate(
         [disc_train_pheno_norm, np.zeros(n_target_train, dtype=np.float32)], axis=0
     )
 
-    # ------------------------------------------------------------------
-    # masker
-    # ------------------------------------------------------------------
     masker = Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
 
-    # ------------------------------------------------------------------
-    # training loader  (CEU + YRI stacked, shuffled)
-    # Tuple: (x, pheno, pop_label)   pop_label: 0=CEU, 1=YRI
-    # ------------------------------------------------------------------
-    training_geno_t  = torch.tensor(training_dataset,    dtype=torch.float32).unsqueeze(1)
-    training_pheno_t = torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(1)
-    training_pop_t   = torch.cat([
-        torch.zeros(n_disc_train,  dtype=torch.long),
-        torch.ones(n_target_train, dtype=torch.long),
-    ])
-
-    train_ds     = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
+    # Training loader
+    train_ds = TensorDataset(
+        torch.tensor(training_dataset,    dtype=torch.float32).unsqueeze(1),
+        torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(1),
+        torch.cat([torch.zeros(n_disc_train, dtype=torch.long),
+                   torch.ones(n_target_train, dtype=torch.long)]),
+    )
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
-    # ------------------------------------------------------------------
-    # evaluation loaders (plots only, no gradient updates)
-    # Tuple: (input_x, original_x, pheno, mask, pop_label)
-    # ------------------------------------------------------------------
+    # Eval loaders
     disc_train_loader = make_eval_loader(
-        geno=disc_train_dataset,
-        pheno_norm=disc_train_pheno_norm,
-        pop_label_value=0,
-        batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="discovery_train",
+        disc_train_dataset, disc_train_pheno_norm, 0,
+        batch_size, masker, masking, out, "discovery_train",
     )
-
     target_train_loader = make_eval_loader(
-        geno=target_train_dataset,
-        pheno_norm=target_train_pheno_norm,
-        pop_label_value=1,
-        batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="target_train",
+        target_train_dataset, target_train_pheno_norm, 1,
+        batch_size, masker, masking, out, "target_train",
     )
-
     val_loader = make_eval_loader(
-        geno=validation_dataset,
-        pheno_norm=validation_pheno_norm,
-        pop_label_value=0,
-        batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="discovery_validation",
+        validation_dataset, validation_pheno_norm, 0,
+        batch_size, masker, masking, out, "discovery_validation",
     )
 
-    # ------------------------------------------------------------------
-    # diagnostic heatmap
-    # ------------------------------------------------------------------
+    # Diagnostic heatmap
     val_geno_t  = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
     val_input_x = next(iter(val_loader))[0]
     val_mask    = next(iter(val_loader))[3]
-
     plot_example_input_heatmap(
-        original_x=val_geno_t,
-        masked_x=val_input_x,
-        mask=val_mask,
+        original_x=val_geno_t, masked_x=val_input_x, mask=val_mask,
         output_path=out / "example_input_heatmap_val.png",
-        sample_indices=(0, 1, 2, 3, 4),
-        snp_start=0,
-        snp_count=1000,
+        sample_indices=(0, 1, 2, 3, 4), snp_start=0, snp_count=1000,
     )
 
     # ------------------------------------------------------------------
-    # model
+    # Model
     # ------------------------------------------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -404,7 +266,8 @@ def main(
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
-        latent_dim=latent_dim,
+        latent_dim_shared=latent_dim_shared,
+        latent_dim_private=latent_dim_private,
         use_batchnorm=False,
         activation="elu",
         pheno_dim=1,
@@ -416,16 +279,16 @@ def main(
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # shape trace — model now returns 6 values
+    # Shape trace
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
-        logits, mu, logvar, z, pheno_pred, domain_logits = model(x_batch, verbose=True)
-    if domain_logits is not None:
-        print(f"domain_logits: {domain_logits.shape}")
+        out_tuple = model(x_batch, verbose=True)
+    _, mu_s, _, mu_p, _, _, _, _, d_logits = out_tuple
+    print(f"mu_shared: {mu_s.shape}  mu_private: {mu_p.shape}")
+    if d_logits is not None:
+        print(f"domain_logits: {d_logits.shape}")
 
-    # ------------------------------------------------------------------
-    # optimizer  (separate weight-decay for pheno head)
-    # ------------------------------------------------------------------
+    # Optimizer: separate weight-decay for pheno head
     pheno_head_params = set(model.pheno_head.parameters())
     other_params      = [p for p in model.parameters() if p not in pheno_head_params]
     optimizer = torch.optim.Adam([
@@ -434,213 +297,141 @@ def main(
     ], lr=learning_rate)
 
     # ------------------------------------------------------------------
-    # training-history accumulators
+    # Training loop
     # ------------------------------------------------------------------
-    train_loss_list, train_recon_unmasked_list = [], []
-    train_recon_masked_list, train_kl_list     = [], []
-    train_phenotype_loss_list                  = []
-    train_domain_loss_list                     = []
-    train_domain_acc_list                      = []
+    train_loss_list, train_recon_u_list = [], []
+    train_recon_m_list, train_kl_list   = [], []
+    train_pheno_list                    = []
+    train_domain_list, train_dacc_list  = [], []
 
-    val_loss_list, val_recon_unmasked_list     = [], []
-    val_recon_masked_list, val_kl_list         = [], []
-    val_phenotype_loss_list                    = []
+    val_loss_list, val_recon_u_list     = [], []
+    val_recon_m_list, val_kl_list       = [], []
+    val_pheno_list                      = []
 
-    best_val_stop_metric       = float("inf")
-    best_model_path            = checkpoint_dir / "best_model.pt"
-    final_model_path           = checkpoint_dir / "final_model.pt"
-    epochs_without_improvement = 0
-    best_epoch                 = 0
+    best_val_stop   = float("inf")
+    best_model_path = checkpoint_dir / "best_model.pt"
+    final_model_path = checkpoint_dir / "final_model.pt"
+    no_improve      = 0
+    best_epoch      = 0
 
-    # ------------------------------------------------------------------
-    # training loop
-    # ------------------------------------------------------------------
     for epoch in range(num_epochs):
-
-        # Update GRL reversal strength each epoch (Ganin schedule)
         if use_grl:
             grl_lam = compute_grl_lambda(epoch, num_epochs, lambda_max=grl_lambda_max)
             model.set_grl_lambda(grl_lam)
         else:
             grl_lam = 0.0
 
-        (train_loss, train_recon_unmasked, train_recon_masked,
-         train_kl, train_pheno, train_domain, train_d_acc) = train_one_epoch(
-            model=model,
-            dataloader=train_loader,
-            optimizer=optimizer,
-            device=device,
-            loss_fn=vae_loss,
-            masker=masker,
-            beta=beta,
-            alpha=alpha,
-            gamma=gamma,
-            use_grl=use_grl,
-            delta=delta,
+        (tr_loss, tr_recon_u, tr_recon_m, tr_kl,
+         tr_pheno, tr_domain, tr_dacc) = train_one_epoch(
+            model=model, dataloader=train_loader, optimizer=optimizer,
+            device=device, loss_fn=vae_loss, masker=masker,
+            beta=beta, alpha=alpha, gamma=gamma,
+            use_grl=use_grl, delta=delta,
         )
 
-        val_loss, val_recon_unmasked, val_recon_masked, val_kl, val_pheno = evaluate(
-            model=model,
-            dataloader=val_loader,
-            device=device,
-            loss_fn=vae_loss,
-            beta=beta,
-            alpha=alpha,
-            gamma=gamma,
+        (v_loss, v_recon_u, v_recon_m, v_kl, v_pheno) = evaluate(
+            model=model, dataloader=val_loader, device=device,
+            loss_fn=vae_loss, beta=beta, alpha=alpha, gamma=gamma,
         )
 
-        val_stop_metric = (
-            val_recon_unmasked
-            + alpha * val_recon_masked
-            + beta  * val_kl
-            + gamma * val_pheno
-        )
+        val_stop = v_recon_u + alpha * v_recon_m + beta * v_kl + gamma * v_pheno
 
-        # accumulate
-        train_loss_list.append(train_loss)
-        train_recon_unmasked_list.append(train_recon_unmasked)
-        train_recon_masked_list.append(train_recon_masked)
-        train_kl_list.append(train_kl)
-        train_phenotype_loss_list.append(train_pheno)
-        train_domain_loss_list.append(train_domain)
-        train_domain_acc_list.append(train_d_acc)
+        train_loss_list.append(tr_loss);  train_recon_u_list.append(tr_recon_u)
+        train_recon_m_list.append(tr_recon_m); train_kl_list.append(tr_kl)
+        train_pheno_list.append(tr_pheno)
+        train_domain_list.append(tr_domain); train_dacc_list.append(tr_dacc)
 
-        val_loss_list.append(val_loss)
-        val_recon_unmasked_list.append(val_recon_unmasked)
-        val_recon_masked_list.append(val_recon_masked)
-        val_kl_list.append(val_kl)
-        val_phenotype_loss_list.append(val_pheno)
+        val_loss_list.append(v_loss);   val_recon_u_list.append(v_recon_u)
+        val_recon_m_list.append(v_recon_m); val_kl_list.append(v_kl)
+        val_pheno_list.append(v_pheno)
 
-        grl_str = (f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
-                   f"  domain_acc={train_d_acc:.3f}") if use_grl else ""
-
+        grl_str = (f" | grl_lam={grl_lam:.3f}  d_ce={tr_domain:.4f}  d_acc={tr_dacc:.3f}"
+                   if use_grl else "")
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
-            f"train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
-            f"train_recon={train_recon_unmasked:.6f} | train_pheno={train_pheno:.6f} | "
-            f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
-            + grl_str
+            f"train={tr_loss:.6f} val={v_loss:.6f} | "
+            f"recon={tr_recon_u:.6f} pheno={tr_pheno:.6f} | "
+            f"val_recon={v_recon_u:.6f} val_pheno={v_pheno:.6f}" + grl_str
         )
 
-        if val_stop_metric < (best_val_stop_metric - min_delta):
-            best_val_stop_metric       = val_stop_metric
-            best_epoch                 = epoch + 1
-            epochs_without_improvement = 0
-            save_checkpoint(
-                path=best_model_path,
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch + 1,
-                val_loss=val_stop_metric,
-                vae_config=vae_config,
-                input_length=input_length,
-            )
+        if val_stop < (best_val_stop - min_delta):
+            best_val_stop = val_stop
+            best_epoch    = epoch + 1
+            no_improve    = 0
+            save_checkpoint(best_model_path, model, optimizer,
+                            epoch + 1, val_stop, vae_config, input_length)
         else:
-            epochs_without_improvement += 1
-            print(
-                f"  No improvement for {epochs_without_improvement} epoch(s) "
-                f"(best={best_val_stop_metric:.6f} at epoch {best_epoch})"
-            )
+            no_improve += 1
+            print(f"  No improvement for {no_improve} epoch(s) "
+                  f"(best={best_val_stop:.6f} at epoch {best_epoch})")
 
-        if epochs_without_improvement >= patience:
+        if no_improve >= patience:
             print(f"Early stopping at epoch {epoch + 1}")
             break
 
     stopped_epoch = len(train_loss_list)
-    save_checkpoint(
-        path=final_model_path,
-        model=model,
-        optimizer=optimizer,
-        epoch=stopped_epoch,
-        val_loss=val_stop_metric,
-        vae_config=vae_config,
-        input_length=input_length,
-    )
+    save_checkpoint(final_model_path, model, optimizer,
+                    stopped_epoch, val_stop, vae_config, input_length)
 
-    # ------------------------------------------------------------------
-    # save training history
-    # ------------------------------------------------------------------
-    history_dict = dict(
-        train_losses                 = np.array(train_loss_list),
-        val_losses                   = np.array(val_loss_list),
-        train_recon_unmasked_losses  = np.array(train_recon_unmasked_list),
-        val_recon_unmasked_losses    = np.array(val_recon_unmasked_list),
-        train_kl_losses              = np.array(train_kl_list),
-        val_kl_losses                = np.array(val_kl_list),
-        train_phenotype_losses       = np.array(train_phenotype_loss_list),
-        val_phenotype_losses         = np.array(val_phenotype_loss_list),
-        train_recon_masked_losses    = np.array(train_recon_masked_list),
-        val_recon_masked_losses      = np.array(val_recon_masked_list),
+    # Training history
+    history = dict(
+        train_losses=np.array(train_loss_list),
+        val_losses=np.array(val_loss_list),
+        train_recon_unmasked_losses=np.array(train_recon_u_list),
+        val_recon_unmasked_losses=np.array(val_recon_u_list),
+        train_kl_losses=np.array(train_kl_list),
+        val_kl_losses=np.array(val_kl_list),
+        train_phenotype_losses=np.array(train_pheno_list),
+        val_phenotype_losses=np.array(val_pheno_list),
+        train_recon_masked_losses=np.array(train_recon_m_list),
+        val_recon_masked_losses=np.array(val_recon_m_list),
     )
     if use_grl:
-        history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
-        history_dict["train_domain_acc"]    = np.array(train_domain_acc_list)
-
-    np.savez(out / "training_history.npz", **history_dict)
+        history["train_domain_losses"] = np.array(train_domain_list)
+        history["train_domain_acc"]    = np.array(train_dacc_list)
+    np.savez(out / "training_history.npz", **history)
 
     plot_loss_curves(
-        train_losses=train_loss_list,
-        val_losses=val_loss_list,
-        train_recon_unmasked_losses=train_recon_unmasked_list,
-        val_recon_unmasked_losses=val_recon_unmasked_list,
-        train_kl_losses=train_kl_list,
-        val_kl_losses=val_kl_list,
-        train_pheno_losses=train_phenotype_loss_list,
-        val_pheno_losses=val_phenotype_loss_list,
-        train_recon_masked_losses=train_recon_masked_list if masking else None,
-        val_recon_masked_losses=val_recon_masked_list     if masking else None,
-        train_domain_losses=train_domain_loss_list if use_grl else None,
-        train_domain_accs=train_domain_acc_list    if use_grl else None,
+        train_losses=train_loss_list,          val_losses=val_loss_list,
+        train_recon_unmasked_losses=train_recon_u_list,
+        val_recon_unmasked_losses=val_recon_u_list,
+        train_kl_losses=train_kl_list,         val_kl_losses=val_kl_list,
+        train_pheno_losses=train_pheno_list,   val_pheno_losses=val_pheno_list,
+        train_recon_masked_losses=train_recon_m_list if masking else None,
+        val_recon_masked_losses=val_recon_m_list     if masking else None,
+        train_domain_losses=train_domain_list if use_grl else None,
+        train_domain_accs=train_dacc_list     if use_grl else None,
         output_dir=out,
     )
 
-    # ------------------------------------------------------------------
-    # reload best model
-    # ------------------------------------------------------------------
+    # Reload best
     best_ckpt = torch.load(best_model_path, map_location=device)
     model.load_state_dict(best_ckpt["model_state_dict"])
-    print(
-        f"Reloaded best model from epoch {best_ckpt['epoch']} "
-        f"with stop_metric={best_ckpt['val_loss']:.6f}"
-    )
+    print(f"Reloaded best model from epoch {best_ckpt['epoch']} "
+          f"(stop_metric={best_ckpt['val_loss']:.6f})")
 
     use_masked = masking
 
-    # ------------------------------------------------------------------
-    # per-split evaluation plots
-    # ------------------------------------------------------------------
-    run_eval_plots(
-        model=model, loader=disc_train_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_train",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-    )
+    # Per-split plots
+    for loader, name in [
+        (disc_train_loader,   "discovery_train"),
+        (target_train_loader, "target_train"),
+        (val_loader,          "discovery_validation"),
+    ]:
+        run_eval_plots(model=model, loader=loader, device=device,
+                       out_dir=plots_dir, split_name=name,
+                       use_masked=use_masked, loss_fn=vae_loss,
+                       alpha=alpha, beta=beta, gamma=gamma)
 
-    run_eval_plots(
-        model=model, loader=target_train_loader, device=device,
-        out_dir=plots_dir, split_name="target_train",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-    )
-
-    run_eval_plots(
-        model=model, loader=val_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_validation",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-    )
-
-    # ------------------------------------------------------------------
-    # shared-coordinate latent PCA across all three splits
-    # ------------------------------------------------------------------
-    disc_train_mu, _   = extract_mu(model, disc_train_loader,   device, use_masked_input=use_masked)
-    target_train_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
-    val_mu, _          = extract_mu(model, val_loader,          device, use_masked_input=use_masked)
+    # Shared-subspace PCA (mu_shared only — the domain-invariant part)
+    disc_mu,   _ = extract_mu_shared(model, disc_train_loader,   device, use_masked)
+    target_mu, _ = extract_mu_shared(model, target_train_loader, device, use_masked)
+    val_mu,    _ = extract_mu_shared(model, val_loader,          device, use_masked)
 
     plot_latent_pca_shared_basis(
-        reference_mu=disc_train_mu,
+        reference_mu=disc_mu,
         ceu_mu=val_mu,
-        yri_mu=target_train_mu,
+        yri_mu=target_mu,
         output_path=plots_dir / "latent_pca_shared_basis.png",
         reference_name="CEU discovery train",
         ceu_name="CEU validation",
@@ -652,19 +443,17 @@ def main(
 # CLI
 # =============================================================================
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Train ConvVAE on mixed CEU+YRI genotypes; evaluate per population."
-    )
-    p.add_argument("--vae-config",           type=Path, required=True)
-    p.add_argument("--training-data",        type=Path, required=True)
-    p.add_argument("--disc-train-data",      type=Path, required=True)
-    p.add_argument("--target-train-data",    type=Path, required=True)
-    p.add_argument("--validation-data",      type=Path, required=True)
-    p.add_argument("--disc-train-pheno",     type=Path, required=True)
-    p.add_argument("--target-train-pheno",   type=Path, required=True)
-    p.add_argument("--validation-pheno",     type=Path, required=True)
-    p.add_argument("--outputs",              type=Path, required=True)
+def build_parser():
+    p = argparse.ArgumentParser()
+    p.add_argument("--vae-config",         type=Path, required=True)
+    p.add_argument("--training-data",      type=Path, required=True)
+    p.add_argument("--disc-train-data",    type=Path, required=True)
+    p.add_argument("--target-train-data",  type=Path, required=True)
+    p.add_argument("--validation-data",    type=Path, required=True)
+    p.add_argument("--disc-train-pheno",   type=Path, required=True)
+    p.add_argument("--target-train-pheno", type=Path, required=True)
+    p.add_argument("--validation-pheno",   type=Path, required=True)
+    p.add_argument("--outputs",            type=Path, required=True)
     return p
 
 

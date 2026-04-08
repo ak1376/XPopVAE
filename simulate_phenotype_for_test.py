@@ -14,6 +14,15 @@ Phenotype model:
     y = G_beta + e
     where noise variance is set to match the requested heritability.
 
+Standardization note:
+    CEU splits are standardized using CEU discovery train mean/std (stored in
+    the architecture). YRI splits are standardized using their own population
+    mean/std (use_pop_specific_standardization=True). This prevents the
+    systematic sign inversion that occurs when CEU allele frequencies are
+    applied to YRI genotypes at sites with large frequency divergence.
+    The effect sizes are still CEU-fit, so cross-population transfer remains
+    genuinely hard — but not artificially impossible.
+
 Evaluations:
     Oracle  R² (Ridge on causal SNPs only)  -- upper bound
     Baseline R² (Ridge on all SNPs / gBLUP) -- cross-population baseline to beat
@@ -97,25 +106,49 @@ def fit_phenotype_architecture(
     return architecture, genetic_component_train
 
 
-def apply_phenotype_architecture(genotype_matrix, architecture, seed=0):
+def apply_phenotype_architecture(
+    genotype_matrix,
+    architecture,
+    seed=0,
+    use_pop_specific_standardization=False,
+):
     '''
     Apply a pre-fit architecture to a genotype matrix.
 
-    Returns:
-        phenotype            : (n_individuals,)
-        genetic_component    : (n_individuals,)
-        environmental_noise  : (n_individuals,)
+    Parameters
+    ----------
+    genotype_matrix : (n_individuals, n_snps)
+    architecture    : dict from fit_phenotype_architecture
+    seed            : int
+    use_pop_specific_standardization : bool
+        If True, standardize causal SNPs using this population's own mean/std
+        rather than the CEU discovery train mean/std stored in the architecture.
+        Use this when applying to YRI to avoid inverting predictions due to
+        allele frequency divergence at causal sites. Effect sizes remain
+        CEU-fit, so cross-population transfer is still genuinely hard.
+
+    Returns
+    -------
+    phenotype            : (n_individuals,)
+    genetic_component    : (n_individuals,)
+    environmental_noise  : (n_individuals,)
     '''
     rng = np.random.default_rng(seed)
     causal_snps  = architecture["causal_snps"]
     effect_sizes = architecture["effect_sizes"]
-    mean         = architecture["mean"]
-    std          = architecture["std"]
     noise_sd     = architecture["noise_sd"]
     standardize  = architecture["standardize"]
 
     X = genotype_matrix[:, causal_snps].astype(float)
+
     if standardize:
+        if use_pop_specific_standardization:
+            mean = X.mean(axis=0)
+            std  = X.std(axis=0, ddof=0)
+            std[std == 0] = 1.0
+        else:
+            mean = architecture["mean"]
+            std  = architecture["std"]
         X = (X - mean) / std
 
     genetic_component   = X @ effect_sizes
@@ -178,19 +211,42 @@ def main():
     causal_snps = architecture["causal_snps"]
     betas       = architecture["effect_sizes"]
 
+    print(f"Causal SNPs selected: {len(causal_snps)}")
+    print(f"CEU causal SNP MAF range: "
+          f"{(X_disc_train[:, causal_snps].mean(axis=0) / 2.0).min():.3f} – "
+          f"{(X_disc_train[:, causal_snps].mean(axis=0) / 2.0).max():.3f}")
+    print(f"YRI causal SNP MAF range: "
+          f"{(X_target_train[:, causal_snps].mean(axis=0) / 2.0).min():.3f} – "
+          f"{(X_target_train[:, causal_snps].mean(axis=0) / 2.0).max():.3f}")
+    print()
+
     # -------------------------------------------------
     # apply architecture to all splits
+    # CEU splits: use CEU standardization (stored in architecture)
+    # YRI splits: use population-specific standardization
     # -------------------------------------------------
-    y_disc_train,      g_disc_train,      e_disc_train      = apply_phenotype_architecture(X_disc_train,      architecture, seed=seed)
-    y_disc_val,        g_disc_val,        e_disc_val        = apply_phenotype_architecture(X_disc_val,        architecture, seed=seed + 1)
-    y_target_train,    g_target_train,    e_target_train    = apply_phenotype_architecture(X_target_train,    architecture, seed=seed + 2)
-    y_target_held_out, g_target_held_out, e_target_held_out = apply_phenotype_architecture(X_target_held_out, architecture, seed=seed + 3)
+    y_disc_train,      g_disc_train,      e_disc_train      = apply_phenotype_architecture(
+        X_disc_train, architecture, seed=seed,
+        use_pop_specific_standardization=False,
+    )
+    y_disc_val,        g_disc_val,        e_disc_val        = apply_phenotype_architecture(
+        X_disc_val, architecture, seed=seed + 1,
+        use_pop_specific_standardization=False,
+    )
+    y_target_train,    g_target_train,    e_target_train    = apply_phenotype_architecture(
+        X_target_train, architecture, seed=seed + 2,
+        use_pop_specific_standardization=True,
+    )
+    y_target_held_out, g_target_held_out, e_target_held_out = apply_phenotype_architecture(
+        X_target_held_out, architecture, seed=seed + 3,
+        use_pop_specific_standardization=True,
+    )
 
     # -------------------------------------------------
     # Oracle: Ridge on causal SNPs only  (upper bound)
     # -------------------------------------------------
     print("=" * 60)
-    print("ORACLE (causal SNPs only)")
+    print("ORACLE (causal SNPs only, trained on CEU disc_train)")
     print("=" * 60)
 
     X_disc_train_causal      = X_disc_train[:, causal_snps]
@@ -219,7 +275,7 @@ def main():
     # Baseline: Ridge on all SNPs  (gBLUP equivalent)
     # -------------------------------------------------
     print("=" * 60)
-    print("BASELINE / gBLUP (all SNPs)")
+    print("BASELINE / gBLUP (all SNPs, trained on CEU disc_train)")
     print("=" * 60)
 
     baseline_model = RidgeCV(alphas=[0.01, 0.1, 1, 10, 100]).fit(
@@ -246,7 +302,8 @@ def main():
     print("SUMMARY")
     print("=" * 60)
     col1, col2, col3, col4 = 32, 14, 16, 18
-    header = f"{'Model':<{col1}} {'disc_val (CEU)':>{col2}} {'tgt_train (YRI)':>{col3}} {'tgt_held_out (YRI)':>{col4}}"
+    header = (f"{'Model':<{col1}} {'disc_val (CEU)':>{col2}} "
+              f"{'tgt_train (YRI)':>{col3}} {'tgt_held_out (YRI)':>{col4}}")
     print(header)
     print("-" * len(header))
     print(
@@ -266,16 +323,14 @@ def main():
     print()
 
     # -------------------------------------------------
-    # Scatter plots  (3 columns: disc_val | tgt_train | tgt_held_out)
+    # Scatter plots
     # -------------------------------------------------
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
     panels = [
-        # oracle row
         (axes[0, 0], y_disc_val,        y_pred_oracle_disc_val,        r2_oracle_disc_val,        "Oracle — disc_val (CEU)"),
         (axes[0, 1], y_target_train,    y_pred_oracle_target_train,    r2_oracle_target_train,    "Oracle — target_train (YRI)"),
         (axes[0, 2], y_target_held_out, y_pred_oracle_target_held_out, r2_oracle_target_held_out, "Oracle — target_held_out (YRI)"),
-        # baseline row
         (axes[1, 0], y_disc_val,        y_pred_baseline_disc_val,        r2_baseline_disc_val,        "gBLUP — disc_val (CEU)"),
         (axes[1, 1], y_target_train,    y_pred_baseline_target_train,    r2_baseline_target_train,    "gBLUP — target_train (YRI)"),
         (axes[1, 2], y_target_held_out, y_pred_baseline_target_held_out, r2_baseline_target_held_out, "gBLUP — target_held_out (YRI)"),
@@ -325,7 +380,8 @@ def main():
 
     disc_train_h2 = np.var(g_disc_train, ddof=0) / np.var(g_disc_train + e_disc_train, ddof=0)
     disc_val_h2   = np.var(g_disc_val,   ddof=0) / np.var(g_disc_val   + e_disc_val,   ddof=0)
-    print(f"Empirical heritability — discovery_train: {disc_train_h2:.4f},  discovery_val: {disc_val_h2:.4f}")
+    print(f"Empirical heritability — discovery_train : {disc_train_h2:.4f}")
+    print(f"Empirical heritability — discovery_val   : {disc_val_h2:.4f}")
     print(f"Noise SD: {architecture['noise_sd']:.6f}")
     print()
 
@@ -351,7 +407,7 @@ def main():
     np.save(output_path / "target_train_noise.npy",    e_target_train)
     np.save(output_path / "target_held_out_noise.npy", e_target_held_out)
 
-    # standardization params
+    # standardization params (CEU)
     np.save(output_path / "train_standardization_mean.npy", architecture["mean"])
     np.save(output_path / "train_standardization_std.npy",  architecture["std"])
 

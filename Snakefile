@@ -274,7 +274,7 @@ rule all:
 
         # --- baselines ---
         PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
-
+        PROC_BASEDIR / "0/rep0/baselines/baseline_results_oracle_yri.txt",
 
 # =============================================================================
 # 1. Run one simulation
@@ -631,6 +631,35 @@ rule run_baselines:
         y_test=PHENO_BASEDIR / "simulated_phenotype_target_held_out.npy",
     output:
         results=PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+    params:
+        out_dir=PROC_BASEDIR / "0/rep0/baselines",
+        h2=float(EXP_CFG.get("h2", 1.0)),
+        seed=42,
+    shell:
+        r"""
+        python {input.script} \
+            --x_train {input.x_train} \
+            --y_train {input.y_train} \
+            --x_val   {input.x_val}   \
+            --y_val   {input.y_val}   \
+            --x_test  {input.x_test}  \
+            --y_test  {input.y_test}  \
+            --out_dir {params.out_dir} \
+            --h2      {params.h2}      \
+            --seed    {params.seed}
+        """
+
+rule run_baselines_oracle_yri:
+    input:
+        script=BASELINE_SCRIPT,
+        x_train=TARGET_TRAIN,
+        y_train=PHENO_BASEDIR / "simulated_phenotype_target_train.npy",
+        x_val=TARGET_TRAIN,      # use train as val too — we just want oracle R²
+        y_val=PHENO_BASEDIR / "simulated_phenotype_target_train.npy",
+        x_test=TARGET_HELD_OUT,
+        y_test=PHENO_BASEDIR / "simulated_phenotype_target_held_out.npy",
+    output:
+        results=PROC_BASEDIR / "0/rep0/baselines/baseline_results_oracle_yri.txt",
     params:
         out_dir=PROC_BASEDIR / "0/rep0/baselines",
         h2=float(EXP_CFG.get("h2", 1.0)),

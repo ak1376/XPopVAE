@@ -3,34 +3,22 @@ from src.loss import recon_unmasked_loss, recon_masked_loss, kl_loss, phenotype_
 
 
 # =============================================================================
-# GRL lambda schedule
+# GRL lambda schedule (Ganin et al. 2016)
 # =============================================================================
 
-def compute_grl_lambda(
-    current_epoch: int,
-    total_epochs: int,
-    lambda_max: float = 1.0,
-) -> float:
-    """
-    Ganin et al. (2016) schedule:
-        lambda = lambda_max * (2 / (1 + exp(-10 * p)) - 1)
-    where p = current_epoch / total_epochs in [0, 1].
-
-    Starts near 0, ramps smoothly to lambda_max.
-    """
+def compute_grl_lambda(current_epoch: int, total_epochs: int, lambda_max: float = 1.0) -> float:
     import math
     p = current_epoch / max(total_epochs, 1)
     return lambda_max * (2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0)
 
 
 # =============================================================================
-# Domain-accuracy helper (no grad, for adaptive weighting / logging)
+# Domain accuracy (no grad)
 # =============================================================================
 
 @torch.no_grad()
 def domain_accuracy(domain_logits: torch.Tensor, pop_labels: torch.Tensor) -> float:
-    preds = domain_logits.argmax(dim=1)
-    return (preds == pop_labels).float().mean().item()
+    return (domain_logits.argmax(dim=1) == pop_labels).float().mean().item()
 
 
 # =============================================================================
@@ -47,35 +35,11 @@ def train_one_epoch(
     alpha: float = 1.0,
     beta: float = 1.0,
     gamma: float = 1.0,
-    # --- GRL ---
     use_grl: bool = False,
     delta: float = 1.0,
 ):
     """
-    Train for one epoch.
-
-    GRL domain loss
-    ---------------
-    When use_grl=True the model returns domain_logits, and we add:
-
-        effective_delta * domain_loss
-
-    to the total loss, where:
-
-        effective_delta = delta * domain_acc
-
-    The adaptive scaling means the encoder is pushed hardest when the
-    domain classifier is most accurate (latent space still domain-
-    separable). As the encoder fools the classifier, the signal naturally
-    shrinks toward zero.
-
-    The GRL layer's reversal strength (lambda) is set externally via
-    model.set_grl_lambda() before each epoch — use compute_grl_lambda()
-    in run_vae.py for the Ganin et al. warmup schedule.
-
-    Returns
-    -------
-    Tuple of 7 floats:
+    Returns 7 floats:
         total_loss, recon_unmasked, recon_masked, kl, pheno, domain_ce, domain_acc
     """
     model.train()
@@ -83,9 +47,9 @@ def train_one_epoch(
     total_loss           = 0.0
     total_recon_unmasked = 0.0
     total_recon_masked   = 0.0
-    total_kl_loss        = 0.0
-    total_phenotype_loss = 0.0
-    total_domain_loss    = 0.0
+    total_kl             = 0.0
+    total_pheno          = 0.0
+    total_domain         = 0.0
     total_domain_acc     = 0.0
 
     for x, pheno, pop_label in dataloader:
@@ -97,30 +61,34 @@ def train_one_epoch(
             input_x, mask = masker.mask(x)
         else:
             input_x = x
-            mask    = torch.zeros(
-                x.shape[0], x.shape[2], dtype=torch.bool, device=x.device
-            )
+            mask    = torch.zeros(x.shape[0], x.shape[2], dtype=torch.bool, device=x.device)
         input_x = input_x.to(device)
         mask    = mask.to(device)
 
         optimizer.zero_grad()
 
-        out, mu, logvar, z, pheno_pred, domain_logits = model(input_x)
+        (out,
+         mu_shared, logvar_shared,
+         mu_private, logvar_private,
+         z_shared, z_private,
+         pheno_pred, domain_logits) = model(input_x)
+
         targets = x.squeeze(1).long()
 
-        recon_unmasked = recon_unmasked_loss(out, targets, mask)
-        recon_masked_l = recon_masked_loss(out, targets, mask)
-        kl             = kl_loss(mu, logvar)
+        recon_u = recon_unmasked_loss(out, targets, mask)
+        recon_m = recon_masked_loss(out, targets, mask)
+        kl      = kl_loss(mu_shared, logvar_shared, mu_private, logvar_private)
 
         ceu_mask = (pop_label == 0)
-        if ceu_mask.any():
-            pheno_l = phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
-        else:
-            pheno_l = torch.tensor(0.0, device=device, requires_grad=False)
+        pheno_l  = (
+            phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
+            if ceu_mask.any()
+            else torch.tensor(0.0, device=device)
+        )
 
         loss, recon_u_val, recon_m_val, kl_val, pheno_val = loss_fn(
-            recon_unmasked=recon_unmasked,
-            recon_masked=recon_masked_l,
+            recon_unmasked=recon_u,
+            recon_masked=recon_m,
             kl=kl,
             pheno_loss=pheno_l,
             alpha=alpha,
@@ -128,23 +96,16 @@ def train_one_epoch(
             gamma=gamma,
         )
 
-        # ------------------------------------------------------------------
-        # GRL domain loss (imported from loss.py)
-        # ------------------------------------------------------------------
+        # GRL domain loss on shared subspace only
         if use_grl and domain_logits is not None:
             d_loss = domain_loss(domain_logits, pop_label)
-            d_acc  = domain_accuracy(domain_logits, pop_label)
-
-            # Adaptive scaling: penalise harder when the classifier is more
-            # accurate (i.e. the latent space is still domain-separable).
-            effective_delta = delta * d_acc
-            loss = loss + effective_delta * d_loss
-
-            total_domain_loss += d_loss.item()
-            total_domain_acc  += d_acc
+            d_acc  = domain_accuracy(domain_logits, pop_label)  # kept for logging only
+            loss   = loss + delta * d_loss                       # fixed weight, no d_acc scaling
+            total_domain     += d_loss.item()
+            total_domain_acc += d_acc
         else:
-            total_domain_loss += 0.0
-            total_domain_acc  += 0.0
+            total_domain     += 0.0
+            total_domain_acc += 0.0
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -153,17 +114,17 @@ def train_one_epoch(
         total_loss           += loss.item()
         total_recon_unmasked += recon_u_val.item()
         total_recon_masked   += recon_m_val.item()
-        total_kl_loss        += kl_val.item()
-        total_phenotype_loss += pheno_val.item()
+        total_kl             += kl_val.item()
+        total_pheno          += pheno_val.item()
 
     n = len(dataloader)
     return (
         total_loss           / n,
         total_recon_unmasked / n,
         total_recon_masked   / n,
-        total_kl_loss        / n,
-        total_phenotype_loss / n,
-        total_domain_loss    / n,
+        total_kl             / n,
+        total_pheno          / n,
+        total_domain         / n,
         total_domain_acc     / n,
     )
 
@@ -175,18 +136,15 @@ def train_one_epoch(
 @torch.no_grad()
 def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0):
     """
-    Evaluate on an eval-style loader (5-tuple batches).
-
     Returns 5 floats: total_loss, recon_unmasked, recon_masked, kl, pheno_loss.
-    Domain logits are ignored — evaluation doesn't update weights.
     """
     model.eval()
 
     total_loss           = 0.0
     total_recon_unmasked = 0.0
     total_recon_masked   = 0.0
-    total_kl_loss        = 0.0
-    total_phenotype_loss = 0.0
+    total_kl             = 0.0
+    total_pheno          = 0.0
 
     for input_x, x, pheno, mask, pop_label in dataloader:
         input_x   = input_x.to(device)
@@ -195,17 +153,22 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
         mask      = mask.to(device)
         pop_label = pop_label.to(device)
 
-        out, mu, logvar, z, pheno_pred, _domain_logits = model(input_x)
+        (out,
+         mu_shared, logvar_shared,
+         mu_private, logvar_private,
+         z_shared, z_private,
+         pheno_pred, _domain_logits) = model(input_x)
+
         targets = x.squeeze(1).long()
 
-        recon_unmasked = recon_unmasked_loss(out, targets, mask)
-        recon_masked_l = recon_masked_loss(out, targets, mask)
-        kl             = kl_loss(mu, logvar)
-        pheno_l        = phenotype_loss(pheno_pred, pheno)
+        recon_u = recon_unmasked_loss(out, targets, mask)
+        recon_m = recon_masked_loss(out, targets, mask)
+        kl      = kl_loss(mu_shared, logvar_shared, mu_private, logvar_private)
+        pheno_l = phenotype_loss(pheno_pred, pheno)
 
         loss, recon_u_val, recon_m_val, kl_val, pheno_val = loss_fn(
-            recon_unmasked=recon_unmasked,
-            recon_masked=recon_masked_l,
+            recon_unmasked=recon_u,
+            recon_masked=recon_m,
             kl=kl,
             pheno_loss=pheno_l,
             alpha=alpha,
@@ -216,16 +179,16 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
         total_loss           += loss.item()
         total_recon_unmasked += recon_u_val.item()
         total_recon_masked   += recon_m_val.item()
-        total_kl_loss        += kl_val.item()
-        total_phenotype_loss += pheno_val.item()
+        total_kl             += kl_val.item()
+        total_pheno          += pheno_val.item()
 
     n = len(dataloader)
     return (
         total_loss           / n,
         total_recon_unmasked / n,
         total_recon_masked   / n,
-        total_kl_loss        / n,
-        total_phenotype_loss / n,
+        total_kl             / n,
+        total_pheno          / n,
     )
 
 

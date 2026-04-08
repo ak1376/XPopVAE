@@ -103,60 +103,61 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> ConvVAE:
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-
+    checkpoint   = torch.load(checkpoint_path, map_location=device)
     vae_config   = checkpoint["vae_config"]
     input_length = int(checkpoint["input_length"])
-
-    pheno_hidden_dim = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
-
+ 
+    pheno_hidden_dim   = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
+ 
     da_cfg         = vae_config.get("domain_adaptation", {})
     use_grl        = bool(da_cfg.get("use_grl", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
-    grl_hidden_dim = int(raw) if raw is not None else None
-
+    raw_hidden     = da_cfg.get("grl_hidden_dim", None)
+    grl_hidden_dim = int(raw_hidden) if raw_hidden is not None else None
+ 
+    # Split latent dims (new); fall back to old single latent_dim for
+    # backward-compatibility with checkpoints trained before the split.
+    model_cfg          = vae_config["model"]
+    latent_dim_shared  = int(model_cfg.get("latent_dim_shared",
+                             model_cfg.get("latent_dim", 512) // 2))
+    latent_dim_private = int(model_cfg.get("latent_dim_private",
+                             model_cfg.get("latent_dim", 512) // 2))
+ 
     model = ConvVAE(
         input_length=input_length,
         in_channels=1,
-        hidden_channels=vae_config["model"]["hidden_channels"],
-        kernel_size=int(vae_config["model"]["kernel_size"]),
-        stride=int(vae_config["model"]["stride"]),
-        padding=int(vae_config["model"]["padding"]),
-        latent_dim=int(vae_config["model"]["latent_dim"]),
-        use_batchnorm=bool(vae_config["model"].get("use_batchnorm", False)),
-        activation=vae_config["model"].get("activation", "elu"),
+        hidden_channels=model_cfg["hidden_channels"],
+        kernel_size=int(model_cfg["kernel_size"]),
+        stride=int(model_cfg["stride"]),
+        padding=int(model_cfg["padding"]),
+        latent_dim_shared=latent_dim_shared,
+        latent_dim_private=latent_dim_private,
+        use_batchnorm=bool(model_cfg.get("use_batchnorm", False)),
+        activation=model_cfg.get("activation", "elu"),
         pheno_dim=1,
         pheno_hidden_dim=pheno_hidden_dim,
         use_grl=use_grl,
         grl_hidden_dim=grl_hidden_dim,
         num_domains=2,
     ).to(device)
-
+ 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     return model
 
-def reconstruct_argmax_genotypes(
-    model: torch.nn.Module,
-    G: np.ndarray,
-    device: torch.device,
-    batch_size: int = 128,
-) -> np.ndarray:
-    X = torch.tensor(G, dtype=torch.float32).unsqueeze(1)  # (N,1,L)
-    ds = TensorDataset(X)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-
+def reconstruct_argmax_genotypes(model, G, device, batch_size=128):
+    from torch.utils.data import DataLoader, TensorDataset
+    X      = torch.tensor(G, dtype=torch.float32).unsqueeze(1)
+    loader = DataLoader(TensorDataset(X), batch_size=batch_size, shuffle=False)
+ 
     recon_batches = []
-
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, _, _, _, _, _ = model(x)   # (B,3,L)
-            pred = torch.argmax(logits, dim=1)  # (B,L)
-            recon_batches.append(pred.cpu().numpy())
-
+            # 9-value return: out, mu_s, lv_s, mu_p, lv_p, z_s, z_p, pheno, domain
+            out, _, _, _, _, _, _, _, _ = model(x)
+            recon_batches.append(torch.argmax(out, dim=1).cpu().numpy())
+ 
     return np.concatenate(recon_batches, axis=0)
-
 
 def _precompute_centered_stats(G: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     G = np.asarray(G, dtype=np.float32)

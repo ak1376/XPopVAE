@@ -20,8 +20,6 @@ class GradientReversalFunction(Function):
 
 
 class GradientReversalLayer(nn.Module):
-    """Scales gradients by -lambda_ during the backward pass."""
-
     def __init__(self, lambda_: float = 1.0):
         super().__init__()
         self.lambda_ = lambda_
@@ -34,7 +32,7 @@ class GradientReversalLayer(nn.Module):
 
 
 # =============================================================================
-# ConvVAE
+# ConvVAE with split latent space (shared + private)
 # =============================================================================
 
 class ConvVAE(nn.Module):
@@ -46,37 +44,39 @@ class ConvVAE(nn.Module):
         kernel_size,
         stride,
         padding,
-        latent_dim,
+        latent_dim_shared,       # domain-invariant subspace
+        latent_dim_private,      # population-specific subspace
         num_classes=3,
         use_batchnorm=False,
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=None,
-        # --- domain adaptation ---
         use_grl: bool = False,
-        grl_hidden_dim: int = 256,
+        grl_hidden_dim=None,     # None → single linear domain classifier
         num_domains: int = 2,
     ):
         super().__init__()
 
-        self.input_length = input_length
-        self.in_channels = in_channels
-        self.hidden_channels = hidden_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.latent_dim = latent_dim
-        self.num_classes = num_classes
-        self.use_batchnorm = use_batchnorm
-        self.activation = activation
-        self.use_grl = use_grl
-        self.encoder_lengths = [input_length]
+        self.input_length       = input_length
+        self.in_channels        = in_channels
+        self.hidden_channels    = hidden_channels
+        self.kernel_size        = kernel_size
+        self.stride             = stride
+        self.padding            = padding
+        self.latent_dim_shared  = latent_dim_shared
+        self.latent_dim_private = latent_dim_private
+        self.latent_dim         = latent_dim_shared + latent_dim_private  # total
+        self.num_classes        = num_classes
+        self.use_batchnorm      = use_batchnorm
+        self.activation         = activation
+        self.use_grl            = use_grl
+        self.encoder_lengths    = [input_length]
 
         # ------------------------------------------------------------------
         # Encoder
         # ------------------------------------------------------------------
         enc_layers = []
-        current_in = in_channels
+        current_in     = in_channels
         current_length = input_length
 
         for current_out in hidden_channels:
@@ -101,53 +101,61 @@ class ConvVAE(nn.Module):
         self.encoder = nn.Sequential(*enc_layers)
 
         self.final_channels = hidden_channels[-1]
-        self.final_length = current_length
-        self.flat_dim = self.final_channels * self.final_length
-
-        self.fc_mu     = nn.Linear(self.flat_dim, latent_dim)
-        self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
-        self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
+        self.final_length   = current_length
+        self.flat_dim       = self.final_channels * self.final_length
 
         # ------------------------------------------------------------------
-        # Phenotype head
+        # Split bottleneck
+        # Four projection heads instead of two
+        # ------------------------------------------------------------------
+        self.fc_mu_shared      = nn.Linear(self.flat_dim, latent_dim_shared)
+        self.fc_logvar_shared  = nn.Linear(self.flat_dim, latent_dim_shared)
+        self.fc_mu_private     = nn.Linear(self.flat_dim, latent_dim_private)
+        self.fc_logvar_private = nn.Linear(self.flat_dim, latent_dim_private)
+
+        # Decoder input = cat([z_shared, z_private])
+        self.fc_decode = nn.Linear(latent_dim_shared + latent_dim_private, self.flat_dim)
+
+        # ------------------------------------------------------------------
+        # Phenotype head — mu_shared only
         # ------------------------------------------------------------------
         if pheno_hidden_dim is None:
-            self.pheno_head = nn.Linear(latent_dim, pheno_dim)
+            self.pheno_head = nn.Linear(latent_dim_shared, pheno_dim)
         else:
             self.pheno_head = nn.Sequential(
-                nn.Linear(latent_dim, pheno_hidden_dim),
+                nn.Linear(latent_dim_shared, pheno_hidden_dim),
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
 
         # ------------------------------------------------------------------
-        # Domain classifier (with GRL)
+        # Domain classifier — mu_shared only, behind GRL
         # ------------------------------------------------------------------
         if use_grl:
             self.grl = GradientReversalLayer(lambda_=1.0)
             if grl_hidden_dim is None:
-                self.domain_classifier = nn.Linear(latent_dim, num_domains)
+                self.domain_classifier = nn.Linear(latent_dim_shared, num_domains)
             else:
                 self.domain_classifier = nn.Sequential(
-                    nn.Linear(latent_dim, grl_hidden_dim),
+                    nn.Linear(latent_dim_shared, grl_hidden_dim),
                     self._get_activation(),
                     nn.Linear(grl_hidden_dim, num_domains),
                 )
         else:
-            self.grl = None
+            self.grl               = None
             self.domain_classifier = None
 
         # ------------------------------------------------------------------
         # Decoder
         # ------------------------------------------------------------------
-        dec_layers = []
+        dec_layers       = []
         decoder_channels = list(reversed(hidden_channels))
         target_lengths   = list(reversed(self.encoder_lengths[:-1]))
         current_in       = decoder_channels[0]
         current_length   = self.encoder_lengths[-1]
 
         for i, target_length in enumerate(target_lengths):
-            is_last    = i == len(target_lengths) - 1
+            is_last     = i == len(target_lengths) - 1
             current_out = decoder_channels[i + 1] if not is_last else num_classes
 
             base_length    = (current_length - 1) * stride - 2 * padding + kernel_size
@@ -194,17 +202,12 @@ class ConvVAE(nn.Module):
     def compute_conv1d_output_length(length, kernel_size, stride, padding):
         return ((length + 2 * padding - kernel_size) // stride) + 1
 
-    @staticmethod
-    def compute_transpose_output_length(length, kernel_size, stride, padding, output_padding):
-        return (length - 1) * stride - 2 * padding + kernel_size + output_padding
-
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
     def set_grl_lambda(self, lambda_: float):
-        """Update the GRL reversal strength. Call this each epoch from the training loop."""
         if self.grl is not None:
             self.grl.set_lambda(lambda_)
 
@@ -216,12 +219,15 @@ class ConvVAE(nn.Module):
         """
         Returns
         -------
-        out          : (B, num_classes, L)  decoder logits
-        mu           : (B, latent_dim)
-        logvar       : (B, latent_dim)
-        z            : (B, latent_dim)
-        pheno_pred   : (B, 1)
-        domain_logits: (B, num_domains) if use_grl else None
+        out            : (B, num_classes, L)
+        mu_shared      : (B, latent_dim_shared)
+        logvar_shared  : (B, latent_dim_shared)
+        mu_private     : (B, latent_dim_private)
+        logvar_private : (B, latent_dim_private)
+        z_shared       : (B, latent_dim_shared)
+        z_private      : (B, latent_dim_private)
+        pheno_pred     : (B, 1)
+        domain_logits  : (B, num_domains) or None
         """
         if verbose:
             print(f"Input: {x.shape}")
@@ -236,25 +242,30 @@ class ConvVAE(nn.Module):
         if verbose:
             print(f"Flattened: {h_flat.shape}")
 
-        mu     = self.fc_mu(h_flat)
-        logvar = self.fc_logvar(h_flat)
-        logvar = torch.clamp(logvar, min=-6.0, max=6.0)
-        z      = self.reparameterize(mu, logvar)
+        # Split bottleneck
+        mu_shared      = self.fc_mu_shared(h_flat)
+        logvar_shared  = torch.clamp(self.fc_logvar_shared(h_flat),  min=-6.0, max=6.0)
+        mu_private     = self.fc_mu_private(h_flat)
+        logvar_private = torch.clamp(self.fc_logvar_private(h_flat), min=-6.0, max=6.0)
 
-        # Phenotype prediction from mu (deterministic path)
-        pheno_pred = self.pheno_head(mu)
+        z_shared  = self.reparameterize(mu_shared,  logvar_shared)
+        z_private = self.reparameterize(mu_private, logvar_private)
 
-        # Domain classification through reversed gradients
+        # Phenotype: shared subspace only
+        pheno_pred = self.pheno_head(mu_shared)
+
+        # Domain classifier: shared subspace only, behind GRL
         if self.use_grl:
-            z_rev         = self.grl(mu)          # gradient sign flipped here
-            domain_logits = self.domain_classifier(z_rev)
+            domain_logits = self.domain_classifier(self.grl(mu_shared))
         else:
             domain_logits = None
 
-        # Decoder
+        # Decoder: full concatenated latent
+        z     = torch.cat([z_shared, z_private], dim=1)
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
-        out   = h_dec
+
+        out = h_dec
         for i, layer in enumerate(self.decoder):
             out = layer(out)
             if verbose:
@@ -264,7 +275,13 @@ class ConvVAE(nn.Module):
         if out.shape != expected_shape:
             raise ValueError(
                 f"Decoder output shape {out.shape} does not match "
-                f"expected logits shape {expected_shape}"
+                f"expected {expected_shape}"
             )
 
-        return out, mu, logvar, z, pheno_pred, domain_logits
+        return (
+            out,
+            mu_shared, logvar_shared,
+            mu_private, logvar_private,
+            z_shared, z_private,
+            pheno_pred, domain_logits,
+        )
