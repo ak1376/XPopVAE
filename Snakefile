@@ -76,7 +76,7 @@ def build_experiment_grid(base_cfg):
 # Load config files
 # =============================================================================
 
-EXP_CFG_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/experiment_config_IM_symmetric.json")
+EXP_CFG_PATH  = Path("/sietch_colab/akapoor/XPopVAE/config_files/experiment_config_OOA.json")
 VAE_YAML_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/model_hyperparams/vae.yaml")
 
 EXP_CFG = json.loads(EXP_CFG_PATH.read_text())
@@ -93,20 +93,14 @@ for exp_id, spec in EXPERIMENTS.items():
 # Core settings from experiment config
 # =============================================================================
 
-MODEL               = EXP_CFG["demographic_model"]
-NUM_DRAWS           = int(EXP_CFG.get("num_draws", 1))
-NUM_REPLICATES      = int(EXP_CFG.get("num_replicates", 1))
-MAF_THRESHOLD       = float(EXP_CFG.get("maf_threshold", 0.0))
-DISCOVERY_POP       = str(EXP_CFG.get("discovery", "CEU"))
-SUBSET_SNPS         = int(EXP_CFG.get("subset_snps", 10000))
-SUBSET_BP           = EXP_CFG.get("subset_bp", None)
-SUBSET_MODE         = str(EXP_CFG.get("subset_mode", "random"))
-SUBSET_SEED         = int(EXP_CFG.get("subset_seed", 295))
-SPLIT_SEED          = int(EXP_CFG.get("split_seed", 42))
-DISC_TRAIN_FRAC     = float(EXP_CFG.get("discovery_train_frac", 0.8))
+MODEL                = EXP_CFG["demographic_model"]
+NUM_DRAWS            = int(EXP_CFG.get("num_draws", 1))
+NUM_REPLICATES       = int(EXP_CFG.get("num_replicates", 1))
+MAF_THRESHOLD        = float(EXP_CFG.get("maf_threshold", 0.0))
+DISCOVERY_POP        = str(EXP_CFG.get("discovery", "CEU"))
+SPLIT_SEED           = int(EXP_CFG.get("seed", 42))
+DISC_TRAIN_FRAC      = float(EXP_CFG.get("discovery_train_frac", 0.8))
 TARGET_HELD_OUT_FRAC = float(EXP_CFG.get("target_held_out_frac", 0.8))
-
-PHENO_BASEDIR = Path("/sietch_colab/akapoor/XPopVAE/phenotype_creation")
 
 print("Loaded experiment config:")
 print(f"  MODEL={MODEL}")
@@ -131,12 +125,12 @@ if VAE_GRID_ENABLED:
 # Scripts
 # =============================================================================
 
-SIM_SCRIPT          = "snakemake_scripts/run_simulation.py"
-BUILD_GT_SCRIPT     = "snakemake_scripts/run_build_genotypes.py"
-TRAIN_VAE_SCRIPT    = "snakemake_scripts/train_vae_wrapper.py"
-COMPARE_LD_SCRIPT   = "snakemake_scripts/compare_ld_decay.py"
+SIM_SCRIPT            = "snakemake_scripts/run_simulation.py"
+BUILD_GT_SCRIPT       = "snakemake_scripts/run_build_genotypes.py"
+TRAIN_VAE_SCRIPT      = "snakemake_scripts/train_vae_wrapper.py"
+COMPARE_LD_SCRIPT     = "snakemake_scripts/compare_ld_decay.py"
 DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
-BASELINE_SCRIPT     = "snakemake_scripts/baseline_predictors.py"
+BASELINE_SCRIPT       = "snakemake_scripts/baseline_predictors.py"
 
 # =============================================================================
 # Directories
@@ -146,9 +140,8 @@ SIM_BASEDIR  = Path(f"experiments/{MODEL}/simulations")
 PROC_BASEDIR = Path(f"experiments/{MODEL}/processed_data")
 VAE_BASEDIR  = Path(f"experiments/{MODEL}/vae")
 
-SIM_BASEDIR.mkdir(parents=True, exist_ok=True)
-PROC_BASEDIR.mkdir(parents=True, exist_ok=True)
-VAE_BASEDIR.mkdir(parents=True, exist_ok=True)
+for d in (SIM_BASEDIR, PROC_BASEDIR, VAE_BASEDIR):
+    d.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # Wildcard values
@@ -198,83 +191,102 @@ def exp_config_path(wc):
 
 rule all:
     input:
-        # --- genotype_matrices/ ---
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/validation.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/held_out.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-
-        # --- phenotypes/ ---
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/validation_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/held_out_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-
-        # --- auxiliary ---
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-        expand(PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
-               sim_number=SIM_NUMBERS, replicate=REPLICATES),
-
-        # --- VAE checkpoints + training history ---
-        expand(VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
-               exp_id=EXP_IDS),
-
-        # --- VAE per-split plots (sentinel files) ---
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/target_train/latent_space.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
-               exp_id=EXP_IDS),
-
-        # --- LD decay diagnostics ---
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_truth_vs_reconstructed.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_truth_vs_reconstructed.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_truth_vs_reconstructed.png",
-               exp_id=EXP_IDS),
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-               exp_id=EXP_IDS),
-
-        # --- allele freq vs LD diagnostic ---
-        expand(VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-               exp_id=EXP_IDS),
-
-        # --- baselines ---
-        PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
-
+        # --- simulations ---
+        expand(
+            SIM_BASEDIR / "{sim_number}/rep{replicate}/tree_sequence.trees",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            SIM_BASEDIR / "{sim_number}/rep{replicate}/sampled_params.pkl",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            SIM_BASEDIR / "{sim_number}/rep{replicate}/demes.png",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        # --- genotype matrices ---
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/trait_df.pkl",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/biallelic_site_ids.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/maf_filter_report.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        # --- phenotypes ---
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        # # --- VAE checkpoints ---
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # # --- LD decay diagnostics ---
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # # --- allele freq vs LD diagnostic ---
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # # --- baselines ---
+        # PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
 
 # =============================================================================
 # 1. Run one simulation
@@ -286,8 +298,6 @@ rule run_simulation:
         experiment_config=EXP_CFG_PATH,
     output:
         tree=SIM_BASEDIR / "{sim_number}/rep{replicate}/tree_sequence.trees",
-        phenotype=SIM_BASEDIR / "{sim_number}/rep{replicate}/phenotype.pkl",
-        effect_sizes=SIM_BASEDIR / "{sim_number}/rep{replicate}/effect_sizes.pkl",
         sfs=SIM_BASEDIR / "{sim_number}/rep{replicate}/SFS.pkl",
         sampled_params=SIM_BASEDIR / "{sim_number}/rep{replicate}/sampled_params.pkl",
         demes_png=SIM_BASEDIR / "{sim_number}/rep{replicate}/demes.png",
@@ -306,79 +316,48 @@ rule run_simulation:
             --output-dir {params.output_dir}
         """
 
-
 # =============================================================================
-# 2. Build genotype arrays from one simulation
+# 2. Build genotype arrays + simulate phenotype from one simulation
 # =============================================================================
 
 rule build_genotypes:
     input:
         script=BUILD_GT_SCRIPT,
         tree=SIM_BASEDIR / "{sim_number}/rep{replicate}/tree_sequence.trees",
-        phenotype=SIM_BASEDIR / "{sim_number}/rep{replicate}/phenotype.pkl",
         experiment_config=EXP_CFG_PATH,
     output:
-        # --- genotype_matrices/ ---
+        # genotype_matrices/
         training=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
         discovery_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
-        target_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
-        validation=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/validation.npy",
         discovery_validation=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
-        held_out=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/held_out.npy",
+        target_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
         target_held_out=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
-        # --- phenotypes/ ---
+        trait_df=PROC_BASEDIR / "{sim_number}/rep{replicate}/trait_df.pkl",
+        # phenotypes/
         training_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
         discovery_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
-        target_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
-        validation_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/validation_pheno.npy",
         discovery_validation_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
-        held_out_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/held_out_pheno.npy",
+        target_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
         target_held_out_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
-        # --- auxiliary (outdir root) ---
-        meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/meta.pkl",
-        hap_meta=PROC_BASEDIR / "{sim_number}/rep{replicate}/hap_meta.pkl",
-        all_individuals=PROC_BASEDIR / "{sim_number}/rep{replicate}/all_individuals.npy",
-        hap1=PROC_BASEDIR / "{sim_number}/rep{replicate}/hap1.npy",
-        hap2=PROC_BASEDIR / "{sim_number}/rep{replicate}/hap2.npy",
-        snp_index=PROC_BASEDIR / "{sim_number}/rep{replicate}/snp_index.npy",
-        variant_positions=PROC_BASEDIR / "{sim_number}/rep{replicate}/variant_positions_bp.npy",
-        variant_site_ids=PROC_BASEDIR / "{sim_number}/rep{replicate}/variant_site_ids.npy",
-        ts_individual_ids=PROC_BASEDIR / "{sim_number}/rep{replicate}/ts_individual_ids.npy",
+        # auxiliary
+        phenotype_pkl=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotype.pkl",
         disc_train_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_idx.npy",
         disc_val_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_idx.npy",
         target_train_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_train_idx.npy",
         target_held_out_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/target_held_out_idx.npy",
-        site_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/site_filter_report.txt",
-        genotype_site_stats=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_site_stats.txt",
-        train_mono_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/train_mono_filter_report.txt",
+        variant_positions=PROC_BASEDIR / "{sim_number}/rep{replicate}/variant_positions_bp.npy",
+        biallelic_site_ids=PROC_BASEDIR / "{sim_number}/rep{replicate}/biallelic_site_ids.npy",
+        maf_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/maf_filter_report.txt",
+
     params:
         outdir=lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}",
-        maf_threshold=MAF_THRESHOLD,
-        subset_snps=SUBSET_SNPS,
-        subset_mode=SUBSET_MODE,
-        subset_seed=SUBSET_SEED,
-        disc_train_frac=DISC_TRAIN_FRAC,
-        target_held_out_frac=TARGET_HELD_OUT_FRAC,
-        split_seed=SPLIT_SEED,
-        discovery_pop=DISCOVERY_POP,
     shell:
-        r"""
+        """
         python {input.script} \
             --tree {input.tree} \
-            --phenotype {input.phenotype} \
             --outdir {params.outdir} \
-            --experiment-config-json {input.experiment_config} \
-            --maf-threshold {params.maf_threshold} \
-            --subset-snps {params.subset_snps} \
-            --subset-mode {params.subset_mode} \
-            --subset-seed {params.subset_seed} \
-            --disc-train-frac {params.disc_train_frac} \
-            --target-held-out-frac {params.target_held_out_frac} \
-            --split-seed {params.split_seed} \
-            --discovery-pop {params.discovery_pop}
+            --experiment-config-json {input.experiment_config}
         """
-
-
 # =============================================================================
 # 3. Write resolved VAE config
 # =============================================================================
@@ -411,25 +390,23 @@ rule train_vae:
         target_train_data=PROC_BASEDIR / "0/rep0/genotype_matrices/target_train.npy",
         validation_data=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy",
         # phenotypes
-        disc_train_pheno=PHENO_BASEDIR / "simulated_phenotype_disc_train.npy",
-        target_train_pheno=PHENO_BASEDIR / "simulated_phenotype_target_train.npy",
-        validation_pheno=PHENO_BASEDIR / "simulated_phenotype_disc_val.npy",
+        disc_train_pheno=PROC_BASEDIR / "0/rep0/phenotypes/discovery_train_pheno.npy",
+        target_train_pheno=PROC_BASEDIR / "0/rep0/phenotypes/target_train_pheno.npy",
+        validation_pheno=PROC_BASEDIR / "0/rep0/phenotypes/discovery_validation_pheno.npy",
     output:
         best_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
         final_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
         history=VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
-        # per-split plot sentinel files
         disc_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
         target_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/target_train/latent_space.png",
         val_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
-        # snapshots of training inputs
         snap_training=VAE_BASEDIR / "{exp_id}/training_inputs/training.npy",
         snap_disc_train=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
         snap_target_train=VAE_BASEDIR / "{exp_id}/training_inputs/target_train.npy",
         snap_val=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_validation.npy",
-        snap_disc_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_disc_train.npy",
-        snap_target_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_target_train.npy",
-        snap_val_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/simulated_phenotype_disc_val.npy",
+        snap_disc_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train_pheno.npy",
+        snap_target_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/target_train_pheno.npy",
+        snap_val_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_validation_pheno.npy",
     params:
         outdir=lambda wc: VAE_BASEDIR / wc.exp_id,
     shell:
@@ -446,15 +423,14 @@ rule train_vae:
             --outputs             {params.outdir}
 
         mkdir -p {params.outdir}/training_inputs
-        cp {input.training_data}       {output.snap_training}
-        cp {input.disc_train_data}     {output.snap_disc_train}
-        cp {input.target_train_data}   {output.snap_target_train}
-        cp {input.validation_data}     {output.snap_val}
-        cp {input.disc_train_pheno}    {output.snap_disc_train_pheno}
-        cp {input.target_train_pheno}  {output.snap_target_train_pheno}
-        cp {input.validation_pheno}    {output.snap_val_pheno}
+        cp {input.training_data}      {output.snap_training}
+        cp {input.disc_train_data}    {output.snap_disc_train}
+        cp {input.target_train_data}  {output.snap_target_train}
+        cp {input.validation_data}    {output.snap_val}
+        cp {input.disc_train_pheno}   {output.snap_disc_train_pheno}
+        cp {input.target_train_pheno} {output.snap_target_train_pheno}
+        cp {input.validation_pheno}   {output.snap_val_pheno}
         """
-
 
 # =============================================================================
 # 5. LD decay — discovery validation
@@ -623,17 +599,17 @@ rule diagnose_allelefreq_vs_ld:
 rule run_baselines:
     input:
         script=BASELINE_SCRIPT,
-        x_train=DISCOVERY_TRAIN,
-        y_train=PHENO_BASEDIR / "simulated_phenotype_disc_train.npy",
-        x_val=DISCOVERY_VAL,
-        y_val=PHENO_BASEDIR / "simulated_phenotype_disc_val.npy",
-        x_test=TARGET_HELD_OUT,
-        y_test=PHENO_BASEDIR / "simulated_phenotype_target_held_out.npy",
+        x_train=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_train.npy",
+        y_train=PROC_BASEDIR / "0/rep0/phenotypes/discovery_train_pheno.npy",
+        x_val=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy",
+        y_val=PROC_BASEDIR / "0/rep0/phenotypes/discovery_validation_pheno.npy",
+        x_test=PROC_BASEDIR / "0/rep0/genotype_matrices/target_held_out.npy",
+        y_test=PROC_BASEDIR / "0/rep0/phenotypes/target_held_out_pheno.npy",
     output:
         results=PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
     params:
         out_dir=PROC_BASEDIR / "0/rep0/baselines",
-        h2=float(EXP_CFG.get("h2", 1.0)),
+        h2=float(EXP_CFG.get("heritability", 1.0)),
         seed=42,
     shell:
         r"""
