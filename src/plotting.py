@@ -336,33 +336,24 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
 
 @torch.no_grad()
 def plot_latent_space(
-    model,
-    dataloader,
-    device,
+    latent_vectors,   # np.ndarray (n_samples, latent_dim) — any vector you want
+    labels,           # np.ndarray (n_samples,)
     output_dir,
     save_path="latent_space.png",
-    use_masked_input=False,
+    title="Latent representation (PCA)",
 ):
-    model.eval()
     _ensure_dir(output_dir)
 
-    all_mu, all_labels = extract_mu(
-        model=model,
-        dataloader=dataloader,
-        device=device,
-        use_masked_input=use_masked_input,
-    )
-
-    mu_2d = PCA(n_components=2).fit_transform(all_mu)
+    mu_2d = PCA(n_components=2).fit_transform(latent_vectors)
 
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(
         mu_2d[:, 0], mu_2d[:, 1],
-        c=all_labels, cmap="coolwarm", alpha=0.7, s=20,
+        c=labels, cmap="coolwarm", alpha=0.7, s=20,
     )
     plt.xlabel("latent PC1")
     plt.ylabel("latent PC2")
-    plt.title("Latent representation (PCA of mu)")
+    plt.title(title)
     plt.colorbar(scatter, label="population")
     plt.tight_layout()
     plt.savefig(f"{output_dir}/{save_path}", dpi=300)
@@ -370,24 +361,24 @@ def plot_latent_space(
 
 
 def plot_latent_pca_shared_basis(
-    reference_mu,
-    ceu_mu,
-    yri_mu,
+    reference_vecs,   # was reference_mu
+    ceu_vecs,         # was ceu_mu
+    yri_vecs,         # was yri_mu
     output_path,
     reference_name="CEU discovery train",
     ceu_name="CEU validation",
     yri_name="YRI target",
 ):
     scaler = StandardScaler()
-    reference_mu_scaled = scaler.fit_transform(reference_mu)
-    ceu_mu_scaled       = scaler.transform(ceu_mu)
-    yri_mu_scaled       = scaler.transform(yri_mu)
+    reference_scaled = scaler.fit_transform(reference_vecs)
+    ceu_scaled       = scaler.transform(ceu_vecs)
+    yri_scaled       = scaler.transform(yri_vecs)
 
     pca = PCA(n_components=2)
-    pca.fit(reference_mu_scaled)
+    pca.fit(reference_scaled)
 
-    ceu_pca = pca.transform(ceu_mu_scaled)
-    yri_pca = pca.transform(yri_mu_scaled)
+    ceu_pca = pca.transform(ceu_scaled)
+    yri_pca = pca.transform(yri_scaled)
 
     explained = pca.explained_variance_ratio_
 

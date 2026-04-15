@@ -39,7 +39,7 @@ masking:
 
 phenotype:
   pheno_hidden_dim: null
-  gamma: 0.60
+  gamma: 0.0
   pheno_weight_decay: 0.0
 
 domain_adaptation:
@@ -62,6 +62,9 @@ grid:
     # - path: "domain_adaptation.lambda_max"
     #   values: [0.0, 0.25, 0.5, 0.75, 1.0]
     #   tag: "lambda_max"
-    - path: "training.beta"
-      values: [ 0.001, 0.01, 0.07, 0.1, 0.3]
-      tag: "beta"
+    # - path: "training.beta"
+    #   values: [ 0.001, 0.01, 0.07, 0.1, 0.3]
+    #   tag: "beta"
+    - path: model.latent_dim
+      values: [256, 512, 1024]
+      tag: "latent_dim"

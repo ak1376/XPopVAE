@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.model import ConvVAE
+from src.utils import load_model_from_checkpoint, reconstruct_argmax_genotypes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,63 +75,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="MAF bin edges. Default: 0 0.01 0.05 0.1 0.2 0.3 0.4 0.5",
     )
     return parser
-
-
-def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> ConvVAE:
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-
-    vae_config   = checkpoint["vae_config"]
-    input_length = int(checkpoint["input_length"])
-
-    pheno_hidden_dim = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
-
-    da_cfg         = vae_config.get("domain_adaptation", {})
-    use_grl        = bool(da_cfg.get("use_grl", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
-    grl_hidden_dim = int(raw) if raw is not None else None
-
-    model = ConvVAE(
-        input_length=input_length,
-        in_channels=1,
-        hidden_channels=vae_config["model"]["hidden_channels"],
-        kernel_size=int(vae_config["model"]["kernel_size"]),
-        stride=int(vae_config["model"]["stride"]),
-        padding=int(vae_config["model"]["padding"]),
-        latent_dim=int(vae_config["model"]["latent_dim"]),
-        use_batchnorm=bool(vae_config["model"].get("use_batchnorm", False)),
-        activation=vae_config["model"].get("activation", "elu"),
-        pheno_dim=1,
-        pheno_hidden_dim=pheno_hidden_dim,
-        use_grl=use_grl,
-        grl_hidden_dim=grl_hidden_dim,
-        num_domains=2,
-    ).to(device)
-
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-    return model
-
-def reconstruct_argmax_genotypes(
-    model: torch.nn.Module,
-    G: np.ndarray,
-    device: torch.device,
-    batch_size: int = 128,
-) -> np.ndarray:
-    X = torch.tensor(G, dtype=torch.float32).unsqueeze(1)  # (N,1,L)
-    ds = TensorDataset(X)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-
-    recon_batches = []
-
-    with torch.no_grad():
-        for (x,) in loader:
-            x = x.to(device)
-            logits, _, _, _, _, _ = model(x)   # (B,3,L)
-            pred = torch.argmax(logits, dim=1)  # (B,L)
-            recon_batches.append(pred.cpu().numpy())
-
-    return np.concatenate(recon_batches, axis=0)
-
 
 def compute_global_balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     recalls = recall_score(

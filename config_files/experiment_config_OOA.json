@@ -41,7 +41,7 @@
     "mean": 0,
     "std": 1
   },
-  "maf_threshold": 0.001,
+  "maf_threshold": 0.005,
   "engine": "msprime",
   "species": "HomSap"
 }

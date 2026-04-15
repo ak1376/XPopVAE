@@ -43,171 +43,18 @@ from src.masking import Masker
 from src.model import ConvVAE
 from src.plotting import (
     plot_example_input_heatmap,
-    plot_latent_space,
     plot_loss_curves,
-    plot_reconstruction,
     plot_latent_pca_shared_basis,
-    plot_pheno_predictions,
-    plot_pheno_predictions_by_population,
-    plot_pheno_residuals,
 )
 from src.train import evaluate, train_one_epoch, compute_grl_lambda
 
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def extract_mu(model, dataloader, device, use_masked_input=False):
-    model.eval()
-    mu_all, labels_all = [], []
-    with torch.no_grad():
-        for batch in dataloader:
-            if len(batch) == 3:
-                x = batch[0]
-                pop_label = batch[-1]
-            elif len(batch) == 5:
-                x = batch[0] if use_masked_input else batch[1]
-                pop_label = batch[-1]
-            else:
-                raise ValueError(f"Unexpected batch length {len(batch)}")
-            x = x.to(device)
-            _, mu, _, _, _, _ = model(x)
-            mu_all.append(mu.cpu().numpy())
-            labels_all.append(pop_label.cpu().numpy())
-    return np.concatenate(mu_all, axis=0), np.concatenate(labels_all, axis=0)
-
-
-def load_vae_config(path: Path) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-def save_checkpoint(path, model, optimizer, epoch, val_loss, vae_config, input_length):
-    torch.save(
-        {
-            "epoch": epoch,
-            "val_loss": val_loss,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "vae_config": vae_config,
-            "input_length": input_length,
-        },
-        path,
-    )
-
-
-def make_eval_loader(
-    geno: np.ndarray,
-    pheno_norm: np.ndarray,
-    pop_label_value: int,
-    batch_size: int,
-    masker,
-    masking: bool,
-    out_dir: Path,
-    split_name: str,
-):
-    """
-    Build a val-style TensorDataset/DataLoader for one evaluation split.
-    Tuple order: (input_x, original_x, pheno, mask, pop_label)
-    """
-    geno_t  = torch.tensor(geno,       dtype=torch.float32).unsqueeze(1)
-    pheno_t = torch.tensor(pheno_norm, dtype=torch.float32).unsqueeze(1)
-
-    if masking:
-        input_x, mask = masker.mask(geno_t)
-        np.save(out_dir / f"masked_{split_name}.npy", input_x.numpy())
-        np.save(out_dir / f"mask_{split_name}.npy",   mask.numpy())
-    else:
-        input_x = geno_t
-        mask    = torch.zeros(geno_t.shape[0], geno_t.shape[2], dtype=torch.bool)
-
-    pop_labels = torch.full((len(geno_t),), pop_label_value, dtype=torch.long)
-
-    ds     = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-    return loader
-
-
-def run_eval_plots(
-    model,
-    loader,
-    device,
-    out_dir: Path,
-    split_name: str,
-    use_masked: bool,
-    loss_fn,
-    alpha: float,
-    beta: float,
-    gamma: float,
-):
-    """
-    Run a full evaluation pass for one split and save all plots + metrics
-    into out_dir/split_name/.
-    """
-    split_dir = out_dir / split_name
-    split_dir.mkdir(parents=True, exist_ok=True)
-
-    loss, recon_unmasked, recon_masked, kl, pheno_loss = evaluate(
-        model=model,
-        dataloader=loader,
-        device=device,
-        loss_fn=loss_fn,
-        alpha=alpha,
-        beta=beta,
-        gamma=gamma,
-    )
-    print(f"\n[{split_name}] loss={loss:.6f}  recon={recon_unmasked:.6f}  "
-          f"kl={kl:.6f}  pheno_loss={pheno_loss:.6f}")
-
-    recon_metrics = plot_reconstruction(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_dir=split_dir,
-        use_masked_input=use_masked,
-    )
-    print(f"[{split_name}] balanced_accuracy={recon_metrics['balanced_accuracy']:.6f}")
-
-    plot_latent_space(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_dir=split_dir,
-        save_path="latent_space.png",
-        use_masked_input=use_masked,
-    )
-
-    pheno_metrics = plot_pheno_predictions(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_path=split_dir / f"pheno_pred_vs_true_{split_name}.png",
-        use_masked_input=use_masked,
-        title=f"{split_name} phenotype prediction",
-    )
-    print(f"[{split_name}] pheno RMSE={pheno_metrics['rmse']:.6f}  R²={pheno_metrics['r2']:.6f}")
-
-    plot_pheno_predictions_by_population(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_path=split_dir / f"pheno_pred_vs_true_{split_name}_by_pop.png",
-        use_masked_input=use_masked,
-        title=f"{split_name} phenotype prediction by population",
-    )
-
-    plot_pheno_residuals(
-        model=model,
-        dataloader=loader,
-        device=device,
-        output_path=split_dir / f"pheno_residuals_{split_name}.png",
-        use_masked_input=use_masked,
-        title=f"{split_name} phenotype residuals",
-    )
-
-    return recon_metrics, pheno_metrics
-
+from src.utils import (
+    extract_latent,
+    load_vae_config,
+    save_checkpoint,
+    make_eval_loader,
+    run_eval_plots,
+)
 
 # =============================================================================
 # Main
@@ -661,28 +508,26 @@ def main(
     # shared-coordinate latent PCA
     # fit on disc_train, project disc_val + best available YRI split
     # ------------------------------------------------------------------
-    disc_train_mu, _ = extract_mu(model, disc_train_loader, device, use_masked_input=use_masked)
-    val_mu, _        = extract_mu(model, val_loader,        device, use_masked_input=use_masked)
+    disc_train_latent, _ = extract_latent(model, disc_train_loader, device, use_masked_input=use_masked)
+    val_latent,        _ = extract_latent(model, val_loader,        device, use_masked_input=use_masked)
 
     # prefer target_held_out for PCA; fall back to target_train
-    yri_mu = None
+    yri_latent = None
     if target_held_out_loader is not None:
-        yri_mu, _ = extract_mu(model, target_held_out_loader, device, use_masked_input=use_masked)
+        yri_latent, _ = extract_latent(model, target_held_out_loader, device, use_masked_input=use_masked)
     elif target_train_loader is not None:
-        yri_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
+        yri_latent, _ = extract_latent(model, target_train_loader, device, use_masked_input=use_masked)
 
-    if yri_mu is not None:
+    if yri_latent is not None:
         plot_latent_pca_shared_basis(
-            reference_mu=disc_train_mu,
-            ceu_mu=val_mu,
-            yri_mu=yri_mu,
+            reference_vecs=disc_train_latent,
+            ceu_vecs=val_latent,
+            yri_vecs=yri_latent,
             output_path=plots_dir / "latent_pca_shared_basis.png",
             reference_name="CEU discovery train",
             ceu_name="CEU validation",
             yri_name="YRI target",
         )
-
-
 # =============================================================================
 # CLI
 # =============================================================================

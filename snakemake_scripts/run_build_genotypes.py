@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--tree",                   type=Path, required=True)
     ap.add_argument("--outdir",                 type=Path, required=True)
     ap.add_argument("--experiment-config-json", type=Path, required=True)
+    ap.add_argument("--maf-override", type=float, default=None,
+                help="Override maf_threshold from config")
     return ap.parse_args()
 
 
@@ -50,7 +52,7 @@ def main() -> None:
     # ── load config ───────────────────────────────────────────────────────────
     cfg = json.loads(Path(args.experiment_config_json).read_text())
 
-    maf_threshold        = float(cfg.get("maf_threshold", 0.0))
+    maf_threshold = args.maf_override if args.maf_override is not None else float(cfg.get("maf_threshold", 0.0))
     num_causal           = int(cfg["num_causal_variants"])
     h2                   = float(cfg["heritability"])
     distribution         = str(cfg.get("trait_distribution", "normal"))
