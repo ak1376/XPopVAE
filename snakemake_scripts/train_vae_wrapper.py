@@ -17,17 +17,18 @@ Inputs:
     --disc-train-data           : CEU-only training genotypes (discovery_train.npy)  [eval only]
     --target-train-data         : YRI-only training genotypes (target_train.npy)     [eval only]
     --validation-data           : CEU validation genotypes   (discovery_validation.npy)
-    --disc-train-pheno          : CEU training phenotypes    (simulated_phenotype_disc_train.npy)
-    --target-train-pheno        : YRI training phenotypes    (simulated_phenotype_target_train.npy)
-    --validation-pheno          : CEU validation phenotypes  (simulated_phenotype_disc_val.npy)
+    --disc-train-pheno          : CEU training phenotypes
+    --target-train-pheno        : YRI training phenotypes
+    --validation-pheno          : CEU validation phenotypes
     --outputs                   : root output directory
 
-Training loader  : training.npy  (CEU + YRI mixed, shuffled)
+Training loader  : training.npy  (CEU + YRI mixed, or CEU-only if target_held_out_frac=1.0)
                    phenotype loss masked to CEU rows only (pop_label == 0)
 Evaluation loaders (plots + metrics only, no gradient updates):
-    discovery_train/  <- discovery_train.npy
-    target_train/     <- target_train.npy
-    discovery_validation/ <- discovery_validation.npy
+    discovery_train/       <- discovery_train.npy
+    target_train/          <- target_train.npy         (skipped if empty)
+    target_held_out/       <- target_held_out.npy      (always evaluated if file exists)
+    discovery_validation/  <- discovery_validation.npy
 """
 
 # ------------------------------------------------------------------
@@ -71,7 +72,6 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
             else:
                 raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
-            # model now returns 6 values; ignore everything except mu
             _, mu, _, _, _, _ = model(x)
             mu_all.append(mu.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
@@ -275,13 +275,12 @@ def main(
     # ------------------------------------------------------------------
     # hyperparameters — domain adaptation (GRL)
     # ------------------------------------------------------------------
-    da_cfg        = vae_config.get("domain_adaptation", {})
-    use_grl       = bool(da_cfg.get("use_grl", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
+    da_cfg         = vae_config.get("domain_adaptation", {})
+    use_grl        = bool(da_cfg.get("use_grl", False))
+    raw            = da_cfg.get("grl_hidden_dim", None)
     grl_hidden_dim = int(raw) if raw is not None else None
     grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
-    # delta = weight on domain CE loss in the total loss (before adaptive scaling)
-    delta         = float(da_cfg.get("delta", 1.0))
+    delta          = float(da_cfg.get("delta", 1.0))
 
     print(f"Masking enabled: {masking}")
     print(f"GRL enabled: {use_grl}"
@@ -330,8 +329,7 @@ def main(
     masker = Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
 
     # ------------------------------------------------------------------
-    # training loader  (CEU + YRI stacked, shuffled)
-    # Tuple: (x, pheno, pop_label)   pop_label: 0=CEU, 1=YRI
+    # training loader
     # ------------------------------------------------------------------
     training_geno_t  = torch.tensor(training_dataset,    dtype=torch.float32).unsqueeze(1)
     training_pheno_t = torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(1)
@@ -344,8 +342,7 @@ def main(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     # ------------------------------------------------------------------
-    # evaluation loaders (plots only, no gradient updates)
-    # Tuple: (input_x, original_x, pheno, mask, pop_label)
+    # evaluation loaders
     # ------------------------------------------------------------------
     disc_train_loader = make_eval_loader(
         geno=disc_train_dataset,
@@ -356,6 +353,7 @@ def main(
         out_dir=out, split_name="discovery_train",
     )
 
+    # target_train: only build if non-empty
     target_train_loader = make_eval_loader(
         geno=target_train_dataset,
         pheno_norm=target_train_pheno_norm,
@@ -363,7 +361,7 @@ def main(
         batch_size=batch_size,
         masker=masker, masking=masking,
         out_dir=out, split_name="target_train",
-    )
+    ) if n_target_train > 0 else None
 
     val_loader = make_eval_loader(
         geno=validation_dataset,
@@ -373,6 +371,28 @@ def main(
         masker=masker, masking=masking,
         out_dir=out, split_name="discovery_validation",
     )
+
+    # target_held_out: always build if file exists — this is the primary YRI eval
+    held_out_geno_path  = target_train_data_path.parent / "target_held_out.npy"
+    held_out_pheno_path = target_train_data_path.parent.parent / "phenotypes" / "target_held_out_pheno.npy"
+
+    target_held_out_loader = None
+    if held_out_geno_path.exists() and held_out_pheno_path.exists():
+        held_out_geno  = np.load(held_out_geno_path)
+        held_out_pheno = np.load(held_out_pheno_path).astype(np.float32)
+        held_out_pheno_norm = (held_out_pheno - train_mean) / train_std
+        if len(held_out_geno) > 0:
+            target_held_out_loader = make_eval_loader(
+                geno=held_out_geno,
+                pheno_norm=held_out_pheno_norm,
+                pop_label_value=1,
+                batch_size=batch_size,
+                masker=masker, masking=masking,
+                out_dir=out, split_name="target_held_out",
+            )
+            print(f"target_held_out loader built: {held_out_geno.shape}")
+    else:
+        print("target_held_out.npy not found — skipping held-out YRI eval")
 
     # ------------------------------------------------------------------
     # diagnostic heatmap
@@ -416,7 +436,6 @@ def main(
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # shape trace — model now returns 6 values
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
         logits, mu, logvar, z, pheno_pred, domain_logits = model(x_batch, verbose=True)
@@ -424,7 +443,7 @@ def main(
         print(f"domain_logits: {domain_logits.shape}")
 
     # ------------------------------------------------------------------
-    # optimizer  (separate weight-decay for pheno head)
+    # optimizer
     # ------------------------------------------------------------------
     pheno_head_params = set(model.pheno_head.parameters())
     other_params      = [p for p in model.parameters() if p not in pheno_head_params]
@@ -457,7 +476,6 @@ def main(
     # ------------------------------------------------------------------
     for epoch in range(num_epochs):
 
-        # Update GRL reversal strength each epoch (Ganin schedule)
         if use_grl:
             grl_lam = compute_grl_lambda(epoch, num_epochs, lambda_max=grl_lambda_max)
             model.set_grl_lambda(grl_lam)
@@ -496,7 +514,6 @@ def main(
             + gamma * val_pheno
         )
 
-        # accumulate
         train_loss_list.append(train_loss)
         train_recon_unmasked_list.append(train_recon_unmasked)
         train_recon_masked_list.append(train_recon_masked)
@@ -616,12 +633,22 @@ def main(
         alpha=alpha, beta=beta, gamma=gamma,
     )
 
-    run_eval_plots(
-        model=model, loader=target_train_loader, device=device,
-        out_dir=plots_dir, split_name="target_train",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-    )
+    if target_train_loader is not None:
+        run_eval_plots(
+            model=model, loader=target_train_loader, device=device,
+            out_dir=plots_dir, split_name="target_train",
+            use_masked=use_masked, loss_fn=vae_loss,
+            alpha=alpha, beta=beta, gamma=gamma,
+        )
+
+    # always evaluate target_held_out if loader was built
+    if target_held_out_loader is not None:
+        run_eval_plots(
+            model=model, loader=target_held_out_loader, device=device,
+            out_dir=plots_dir, split_name="target_held_out",
+            use_masked=use_masked, loss_fn=vae_loss,
+            alpha=alpha, beta=beta, gamma=gamma,
+        )
 
     run_eval_plots(
         model=model, loader=val_loader, device=device,
@@ -631,21 +658,29 @@ def main(
     )
 
     # ------------------------------------------------------------------
-    # shared-coordinate latent PCA across all three splits
+    # shared-coordinate latent PCA
+    # fit on disc_train, project disc_val + best available YRI split
     # ------------------------------------------------------------------
-    disc_train_mu, _   = extract_mu(model, disc_train_loader,   device, use_masked_input=use_masked)
-    target_train_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
-    val_mu, _          = extract_mu(model, val_loader,          device, use_masked_input=use_masked)
+    disc_train_mu, _ = extract_mu(model, disc_train_loader, device, use_masked_input=use_masked)
+    val_mu, _        = extract_mu(model, val_loader,        device, use_masked_input=use_masked)
 
-    plot_latent_pca_shared_basis(
-        reference_mu=disc_train_mu,
-        ceu_mu=val_mu,
-        yri_mu=target_train_mu,
-        output_path=plots_dir / "latent_pca_shared_basis.png",
-        reference_name="CEU discovery train",
-        ceu_name="CEU validation",
-        yri_name="YRI target train",
-    )
+    # prefer target_held_out for PCA; fall back to target_train
+    yri_mu = None
+    if target_held_out_loader is not None:
+        yri_mu, _ = extract_mu(model, target_held_out_loader, device, use_masked_input=use_masked)
+    elif target_train_loader is not None:
+        yri_mu, _ = extract_mu(model, target_train_loader, device, use_masked_input=use_masked)
+
+    if yri_mu is not None:
+        plot_latent_pca_shared_basis(
+            reference_mu=disc_train_mu,
+            ceu_mu=val_mu,
+            yri_mu=yri_mu,
+            output_path=plots_dir / "latent_pca_shared_basis.png",
+            reference_name="CEU discovery train",
+            ceu_name="CEU validation",
+            yri_name="YRI target",
+        )
 
 
 # =============================================================================

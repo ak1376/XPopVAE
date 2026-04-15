@@ -1,6 +1,6 @@
 model:
   model_type: "fully_conv"
-  latent_dim: 512
+  latent_dim: 128
   hidden_channels: [32, 64, 128, 256, 256, 256]
   kernel_size: 17
   stride: 2
@@ -42,20 +42,6 @@ phenotype:
   gamma: 0.60
   pheno_weight_decay: 0.0
 
-# -------------------------------------------------------------------
-# Domain adaptation via Gradient Reversal Layer (DANN-style)
-# -------------------------------------------------------------------
-# use_grl      : enable/disable the entire domain adaptation pathway
-# grl_hidden_dim: hidden units in the domain classifier MLP
-# lambda_max   : ceiling for the Ganin et al. reversal schedule
-#                  lambda(p) = lambda_max * (2/(1+exp(-10*p)) - 1)
-#                where p = epoch / max_epochs  (ramps 0 → lambda_max)
-# delta        : base weight on the domain CE loss in the total loss.
-#                The actual weight applied each batch is:
-#                  effective_delta = delta * domain_accuracy
-#                so the encoder is pushed hardest when the classifier
-#                is most accurate (latent space still domain-separable).
-# -------------------------------------------------------------------
 domain_adaptation:
   use_grl: false
   grl_hidden_dim: null
@@ -67,12 +53,15 @@ seed: 0
 grid:
   enabled: false
   name:
-    prefix: "vae_grl"
+    prefix: "vae_beta"
     sep: "__"
   dims:
     # - path: "phenotype.gamma"
     #   values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
     #   tag: "gamma"
-    - path: "domain_adaptation.lambda_max"
-      values: [0.0, 0.25, 0.5, 0.75, 1.0]
-      tag: "lambda_max"
+    # - path: "domain_adaptation.lambda_max"
+    #   values: [0.0, 0.25, 0.5, 0.75, 1.0]
+    #   tag: "lambda_max"
+    - path: "training.beta"
+      values: [ 0.001, 0.01, 0.07, 0.1, 0.3]
+      tag: "beta"

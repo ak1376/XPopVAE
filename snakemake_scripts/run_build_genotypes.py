@@ -100,10 +100,11 @@ def main() -> None:
             (test_target_inds if rng.random() < target_held_out_frac
              else train_target_inds).append(ind_id)
 
-    train_discovery_inds      = np.array(train_discovery_inds)
-    validation_discovery_inds = np.array(validation_discovery_inds)
-    train_target_inds         = np.array(train_target_inds)
-    test_target_inds          = np.array(test_target_inds)
+    # FIX: explicit dtype=np.int64 so empty arrays are integer-typed
+    train_discovery_inds      = np.array(train_discovery_inds,      dtype=np.int64)
+    validation_discovery_inds = np.array(validation_discovery_inds, dtype=np.int64)
+    train_target_inds         = np.array(train_target_inds,         dtype=np.int64)
+    test_target_inds          = np.array(test_target_inds,          dtype=np.int64)
 
     print(f"\n[run_build_genotypes] splits:")
     print(f"  train_discovery      : {len(train_discovery_inds)}")
@@ -150,10 +151,12 @@ def main() -> None:
     for d in (outdir, geno_dir, pheno_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    # genotype matrices
-    training_diploid = np.concatenate(
-        [train_discovery_diploid, train_target_diploid], axis=0
-    )
+    # FIX: guard concatenation against empty train_target
+    geno_arrays = [train_discovery_diploid]
+    if len(train_target_inds) > 0:
+        geno_arrays.append(train_target_diploid)
+    training_diploid = np.concatenate(geno_arrays, axis=0)
+
     np.save(geno_dir / "training.npy",             training_diploid)
     np.save(geno_dir / "discovery_train.npy",      train_discovery_diploid)
     np.save(geno_dir / "discovery_validation.npy", validation_discovery_diploid)
@@ -164,9 +167,12 @@ def main() -> None:
     def pheno_values(df: pd.DataFrame) -> np.ndarray:
         return df.sort_values("individual_id")["phenotype"].to_numpy().astype(np.float32)
 
-    np.save(pheno_dir / "training_pheno.npy",
-            np.concatenate([pheno_values(train_discovery_pheno),
-                            pheno_values(train_target_pheno)]))
+    # FIX: guard concatenation against empty train_target
+    pheno_arrays = [pheno_values(train_discovery_pheno)]
+    if len(train_target_inds) > 0:
+        pheno_arrays.append(pheno_values(train_target_pheno))
+    np.save(pheno_dir / "training_pheno.npy", np.concatenate(pheno_arrays))
+
     np.save(pheno_dir / "discovery_train_pheno.npy",      pheno_values(train_discovery_pheno))
     np.save(pheno_dir / "discovery_validation_pheno.npy", pheno_values(validation_discovery_pheno))
     np.save(pheno_dir / "target_train_pheno.npy",         pheno_values(train_target_pheno))

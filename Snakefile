@@ -101,6 +101,7 @@ DISCOVERY_POP        = str(EXP_CFG.get("discovery", "CEU"))
 SPLIT_SEED           = int(EXP_CFG.get("seed", 42))
 DISC_TRAIN_FRAC      = float(EXP_CFG.get("discovery_train_frac", 0.8))
 TARGET_HELD_OUT_FRAC = float(EXP_CFG.get("target_held_out_frac", 0.8))
+HAS_TARGET_TRAIN = TARGET_HELD_OUT_FRAC < 1.0
 
 print("Loaded experiment config:")
 print(f"  MODEL={MODEL}")
@@ -258,36 +259,36 @@ rule all:
             PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
             sim_number=SIM_NUMBERS, replicate=REPLICATES,
         ),
-        # # --- VAE checkpoints ---
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # # --- LD decay diagnostics ---
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # # --- allele freq vs LD diagnostic ---
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # # --- baselines ---
-        # PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
-
+        # --- VAE checkpoints ---
+        expand(
+            VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+            exp_id=EXP_IDS,
+        ),
+        expand(
+            VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
+            exp_id=EXP_IDS,
+        ),
+        # --- LD decay diagnostics ---
+        expand(
+            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+            exp_id=EXP_IDS,
+        ),
+        *(expand(
+            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+            exp_id=EXP_IDS,
+        ) if HAS_TARGET_TRAIN else []),
+        expand(
+            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+            exp_id=EXP_IDS,
+        ),
+        # --- allele freq vs LD diagnostic ---
+        expand(
+            VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+            exp_id=EXP_IDS,
+        ),
+        # --- baselines ---
+        PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+        
 # =============================================================================
 # 1. Run one simulation
 # =============================================================================
@@ -398,7 +399,6 @@ rule train_vae:
         final_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
         history=VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
         disc_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
-        target_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/target_train/latent_space.png",
         val_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
         snap_training=VAE_BASEDIR / "{exp_id}/training_inputs/training.npy",
         snap_disc_train=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
