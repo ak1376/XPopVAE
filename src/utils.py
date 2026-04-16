@@ -64,6 +64,14 @@ def extract_latent(model, dataloader, device, use_masked_input=False):
     latent = np.concatenate([mu, np.exp(0.5 * std)], axis=1)
     return latent, labels
 
+def extract_latent_with_pheno(model, dataloader, device, use_masked_input=False):
+    """Extract mu+std concatenated latent vector, population labels, and phenotype predictions."""
+    from src.plotting import extract_pheno_predictions
+
+    latent, labels = extract_latent(model, dataloader, device, use_masked_input=use_masked_input)
+    y_true, y_pred, _ = extract_pheno_predictions(model, dataloader, device, use_masked_input=use_masked_input)
+
+    return latent, labels, y_true, y_pred
 
 # =============================================================================
 # Helpers
@@ -131,6 +139,8 @@ def run_eval_plots(
     alpha: float,
     beta: float,
     gamma: float,
+    shared_scaler=None,
+    shared_pca=None,
 ):
     """
     Run a full evaluation pass for one split and save all plots + metrics
@@ -166,6 +176,9 @@ def run_eval_plots(
         labels=labels,
         output_dir=split_dir,
         save_path="latent_space.png",
+        title=f"{split_name} latent space",
+        scaler=shared_scaler,
+        pca=shared_pca,
     )
 
     pheno_metrics = plot_pheno_predictions(
@@ -197,7 +210,7 @@ def run_eval_plots(
     )
 
     return recon_metrics, pheno_metrics
-
+    
 def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> "ConvVAE":
     from src.model import ConvVAE
 

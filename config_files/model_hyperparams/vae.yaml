@@ -39,7 +39,7 @@ masking:
 
 phenotype:
   pheno_hidden_dim: null
-  gamma: 0.0
+  gamma: 0.6
   pheno_weight_decay: 0.0
 
 domain_adaptation:
@@ -51,9 +51,9 @@ domain_adaptation:
 seed: 0
 
 grid:
-  enabled: false
+  enabled: true
   name:
-    prefix: "vae_beta"
+    prefix: "vae_gamma"
     sep: "__"
   dims:
     # - path: "phenotype.gamma"
@@ -65,6 +65,9 @@ grid:
     # - path: "training.beta"
     #   values: [ 0.001, 0.01, 0.07, 0.1, 0.3]
     #   tag: "beta"
-    - path: model.latent_dim
-      values: [256, 512, 1024]
-      tag: "latent_dim"
+    # - path: model.latent_dim
+    #   values: [256, 512, 1024]
+    #   tag: "latent_dim"
+    - path: phenotype.gamma
+      values: [0.6, 1.0]
+      tag: "gamma"

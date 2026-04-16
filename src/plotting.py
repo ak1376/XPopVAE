@@ -73,7 +73,6 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
 
         x_input = x_input.to(device)
 
-        # model returns 6 values; domain_logits ignored here
         logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
 
         all_true.append(_to_numpy(pheno))
@@ -236,7 +235,6 @@ def plot_reconstruction(
         x_input = x_input.to(device)
         x_true  = x_true.to(device)
 
-        # model returns 6 values; domain_logits ignored here
         logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
 
         y_true = x_true.long().squeeze(1).cpu().numpy()
@@ -322,7 +320,6 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
 
         x_input = x_input.to(device)
 
-        # model returns 6 values; domain_logits ignored here
         _, mu, _, _, _, _domain_logits = model(x_input)
 
         all_mu.append(mu.cpu())
@@ -334,25 +331,48 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
     return all_mu, all_labels
 
 
-@torch.no_grad()
+def fit_latent_pca(reference_vecs: np.ndarray):
+    """
+    Fit StandardScaler + PCA on reference vectors.
+    Returns (scaler, pca) — pass these into plot_latent_space
+    and plot_latent_pca_shared_basis to keep all plots in the
+    same coordinate system.
+    """
+    scaler = StandardScaler()
+    reference_scaled = scaler.fit_transform(reference_vecs)
+    pca = PCA(n_components=2)
+    pca.fit(reference_scaled)
+    return scaler, pca
+
+
 def plot_latent_space(
-    latent_vectors,   # np.ndarray (n_samples, latent_dim) — any vector you want
-    labels,           # np.ndarray (n_samples,)
+    latent_vectors,
+    labels,
     output_dir,
     save_path="latent_space.png",
     title="Latent representation (PCA)",
+    scaler=None,
+    pca=None,
 ):
     _ensure_dir(output_dir)
 
-    mu_2d = PCA(n_components=2).fit_transform(latent_vectors)
+    if scaler is not None and pca is not None:
+        coords   = pca.transform(scaler.transform(latent_vectors))
+        explained = pca.explained_variance_ratio_
+        xlabel   = f"PC1 ({explained[0] * 100:.2f}% var)"
+        ylabel   = f"PC2 ({explained[1] * 100:.2f}% var)"
+    else:
+        coords = PCA(n_components=2).fit_transform(latent_vectors)
+        xlabel = "latent PC1"
+        ylabel = "latent PC2"
 
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(
-        mu_2d[:, 0], mu_2d[:, 1],
+        coords[:, 0], coords[:, 1],
         c=labels, cmap="coolwarm", alpha=0.7, s=20,
     )
-    plt.xlabel("latent PC1")
-    plt.ylabel("latent PC2")
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
     plt.title(title)
     plt.colorbar(scatter, label="population")
     plt.tight_layout()
@@ -361,38 +381,59 @@ def plot_latent_space(
 
 
 def plot_latent_pca_shared_basis(
-    reference_vecs,   # was reference_mu
-    ceu_vecs,         # was ceu_mu
-    yri_vecs,         # was yri_mu
+    reference_vecs,
+    ceu_vecs,
+    yri_vecs,
     output_path,
     reference_name="CEU discovery train",
     ceu_name="CEU validation",
     yri_name="YRI target",
+    ceu_color_vec=None,
+    yri_color_vec=None,
+    color_label="",
+    scaler=None,
+    pca=None,
 ):
-    scaler = StandardScaler()
-    reference_scaled = scaler.fit_transform(reference_vecs)
-    ceu_scaled       = scaler.transform(ceu_vecs)
-    yri_scaled       = scaler.transform(yri_vecs)
+    if scaler is None or pca is None:
+        scaler, pca = fit_latent_pca(reference_vecs)
 
-    pca = PCA(n_components=2)
-    pca.fit(reference_scaled)
-
-    ceu_pca = pca.transform(ceu_scaled)
-    yri_pca = pca.transform(yri_scaled)
-
+    ceu_pca = pca.transform(scaler.transform(ceu_vecs))
+    yri_pca = pca.transform(scaler.transform(yri_vecs))
     explained = pca.explained_variance_ratio_
 
-    plt.figure(figsize=(7, 6))
-    plt.scatter(ceu_pca[:, 0], ceu_pca[:, 1], alpha=0.7, s=20, label=ceu_name)
-    plt.scatter(yri_pca[:, 0], yri_pca[:, 1], alpha=0.7, s=20, label=yri_name)
+    use_color = ceu_color_vec is not None and yri_color_vec is not None
+    vmin = min(ceu_color_vec.min(), yri_color_vec.min()) if use_color else None
+    vmax = max(ceu_color_vec.max(), yri_color_vec.max()) if use_color else None
 
-    plt.xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
-    plt.ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
-    plt.title(f"Latent PCA\nfit on {reference_name}, both projected")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    sc1 = ax.scatter(
+        ceu_pca[:, 0], ceu_pca[:, 1],
+        c=ceu_color_vec if use_color else None,
+        alpha=0.7, s=20, label=ceu_name,
+        cmap="viridis" if use_color else None,
+        vmin=vmin, vmax=vmax,
+        marker="o",
+    )
+    ax.scatter(
+        yri_pca[:, 0], yri_pca[:, 1],
+        c=yri_color_vec if use_color else None,
+        alpha=0.7, s=20, label=yri_name,
+        cmap="viridis" if use_color else None,
+        vmin=vmin, vmax=vmax,
+        marker="^",
+    )
+
+    if use_color:
+        fig.colorbar(sc1, ax=ax, label=color_label)
+
+    ax.set_xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
+    ax.set_ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
+    ax.set_title(f"Latent PCA\nfit on {reference_name}, both projected")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
 
     print(f"Saved shared-basis PCA plot to: {output_path}")
 
@@ -474,7 +515,6 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
 
-    # domain loss + accuracy curves (only when GRL was enabled)
     if train_domain_losses is not None:
         plt.figure(figsize=(8, 5))
         plt.plot(epochs, train_domain_losses, label="train domain CE")

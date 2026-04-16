@@ -54,6 +54,7 @@ from src.utils import (
     save_checkpoint,
     make_eval_loader,
     run_eval_plots,
+    extract_latent_with_pheno
 )
 
 # =============================================================================
@@ -505,28 +506,112 @@ def main(
     )
 
     # ------------------------------------------------------------------
-    # shared-coordinate latent PCA
-    # fit on disc_train, project disc_val + best available YRI split
+    # fit shared PCA basis on disc_train — used for ALL latent plots
     # ------------------------------------------------------------------
-    disc_train_latent, _ = extract_latent(model, disc_train_loader, device, use_masked_input=use_masked)
-    val_latent,        _ = extract_latent(model, val_loader,        device, use_masked_input=use_masked)
+    from src.plotting import fit_latent_pca
+    disc_train_latent, _, _, _ = extract_latent_with_pheno(
+        model, disc_train_loader, device, use_masked_input=use_masked
+    )
+    shared_scaler, shared_pca = fit_latent_pca(disc_train_latent)
 
-    # prefer target_held_out for PCA; fall back to target_train
-    yri_latent = None
+    # ------------------------------------------------------------------
+    # per-split evaluation plots — all in shared PCA coordinate system
+    # ------------------------------------------------------------------
+    run_eval_plots(
+        model=model, loader=disc_train_loader, device=device,
+        out_dir=plots_dir, split_name="discovery_train",
+        use_masked=use_masked, loss_fn=vae_loss,
+        alpha=alpha, beta=beta, gamma=gamma,
+        shared_scaler=shared_scaler, shared_pca=shared_pca,
+    )
+
+    if target_train_loader is not None:
+        run_eval_plots(
+            model=model, loader=target_train_loader, device=device,
+            out_dir=plots_dir, split_name="target_train",
+            use_masked=use_masked, loss_fn=vae_loss,
+            alpha=alpha, beta=beta, gamma=gamma,
+            shared_scaler=shared_scaler, shared_pca=shared_pca,
+        )
+
     if target_held_out_loader is not None:
-        yri_latent, _ = extract_latent(model, target_held_out_loader, device, use_masked_input=use_masked)
+        run_eval_plots(
+            model=model, loader=target_held_out_loader, device=device,
+            out_dir=plots_dir, split_name="target_held_out",
+            use_masked=use_masked, loss_fn=vae_loss,
+            alpha=alpha, beta=beta, gamma=gamma,
+            shared_scaler=shared_scaler, shared_pca=shared_pca,
+        )
+
+    run_eval_plots(
+        model=model, loader=val_loader, device=device,
+        out_dir=plots_dir, split_name="discovery_validation",
+        use_masked=use_masked, loss_fn=vae_loss,
+        alpha=alpha, beta=beta, gamma=gamma,
+        shared_scaler=shared_scaler, shared_pca=shared_pca,
+    )
+
+    # ------------------------------------------------------------------
+    # shared-coordinate latent PCA — population + phenotype coloring
+    # ------------------------------------------------------------------
+    val_latent, _, val_true, val_pred = extract_latent_with_pheno(
+        model, val_loader, device, use_masked_input=use_masked
+    )
+
+    yri_latent = yri_true = yri_pred = None
+    if target_held_out_loader is not None:
+        yri_latent, _, yri_true, yri_pred = extract_latent_with_pheno(
+            model, target_held_out_loader, device, use_masked_input=use_masked
+        )
     elif target_train_loader is not None:
-        yri_latent, _ = extract_latent(model, target_train_loader, device, use_masked_input=use_masked)
+        yri_latent, _, yri_true, yri_pred = extract_latent_with_pheno(
+            model, target_train_loader, device, use_masked_input=use_masked
+        )
 
     if yri_latent is not None:
+        # plot 1: coloured by population
         plot_latent_pca_shared_basis(
             reference_vecs=disc_train_latent,
             ceu_vecs=val_latent,
             yri_vecs=yri_latent,
-            output_path=plots_dir / "latent_pca_shared_basis.png",
+            output_path=plots_dir / "latent_pca_by_population.png",
             reference_name="CEU discovery train",
             ceu_name="CEU validation",
             yri_name="YRI target",
+            scaler=shared_scaler,
+            pca=shared_pca,
+        )
+
+        # plot 2: coloured by true phenotype
+        plot_latent_pca_shared_basis(
+            reference_vecs=disc_train_latent,
+            ceu_vecs=val_latent,
+            yri_vecs=yri_latent,
+            output_path=plots_dir / "latent_pca_by_true_pheno.png",
+            reference_name="CEU discovery train",
+            ceu_name="CEU validation",
+            yri_name="YRI target",
+            ceu_color_vec=val_true,
+            yri_color_vec=yri_true,
+            color_label="true phenotype",
+            scaler=shared_scaler,
+            pca=shared_pca,
+        )
+
+        # plot 3: coloured by predicted phenotype
+        plot_latent_pca_shared_basis(
+            reference_vecs=disc_train_latent,
+            ceu_vecs=val_latent,
+            yri_vecs=yri_latent,
+            output_path=plots_dir / "latent_pca_by_pred_pheno.png",
+            reference_name="CEU discovery train",
+            ceu_name="CEU validation",
+            yri_name="YRI target",
+            ceu_color_vec=val_pred,
+            yri_color_vec=yri_pred,
+            color_label="predicted phenotype",
+            scaler=shared_scaler,
+            pca=shared_pca,
         )
 # =============================================================================
 # CLI
