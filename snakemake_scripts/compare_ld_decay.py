@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from curses import raw
-from curses import raw
 from pathlib import Path
 import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
 # ------------------------------------------------------------------
 # project paths & local imports
