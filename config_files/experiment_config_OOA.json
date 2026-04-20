@@ -9,7 +9,7 @@
   },
   "discovery": "CEU",
   "discovery_train_frac": 0.8,
-  "target_held_out_frac": 1.0,
+  "target_held_out_frac": 0.8,
   "seed": 42,
   "num_draws": 1,
   "num_replicates": 1,
@@ -35,7 +35,7 @@
     "m_founder", "m_modern"
   ],
   "num_causal_variants": 200,
-  "heritability": 1.0,
+  "heritability": 0.7,
   "trait_distribution": "normal",
   "trait_distribution_parameters": {
     "mean": 0,

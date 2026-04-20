@@ -1,6 +1,7 @@
 model:
   model_type: "fully_conv"
   latent_dim: 128
+  shared_dim: 128
   hidden_channels: [32, 64, 128, 256, 256, 256]
   kernel_size: 17
   stride: 2
@@ -43,7 +44,7 @@ phenotype:
   pheno_weight_decay: 0.0
 
 domain_adaptation:
-  use_grl: false
+  use_grl: true
   grl_hidden_dim: null
   lambda_max: 1.0
   delta: 1.0
@@ -51,9 +52,9 @@ domain_adaptation:
 seed: 0
 
 grid:
-  enabled: true
+  enabled: false
   name:
-    prefix: "vae_gamma"
+    prefix: "vae_grl_gamma_sweep"
     sep: "__"
   dims:
     # - path: "phenotype.gamma"
@@ -68,6 +69,6 @@ grid:
     # - path: model.latent_dim
     #   values: [256, 512, 1024]
     #   tag: "latent_dim"
-    - path: phenotype.gamma
-      values: [0.6, 1.0]
-      tag: "gamma"
+    # - path: phenotype.gamma
+    #   values: [0.6, 1.0]
+    #   tag: "gamma"

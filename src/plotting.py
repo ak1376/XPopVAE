@@ -455,6 +455,8 @@ def plot_loss_curves(
     val_recon_masked_losses=None,
     train_domain_losses=None,
     train_domain_accs=None,
+    train_z_shared_vars=None,   # new: per-epoch mean variance of z_shared
+    train_z_pop_vars=None,      # new: per-epoch mean variance of z_pop
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
@@ -537,6 +539,22 @@ def plot_loss_curves(
         plt.legend()
         plt.tight_layout()
         plt.savefig(f"{output_dir}/domain_classifier_accuracy.png", dpi=300)
+        plt.close()
+
+    # latent subspace variance — always plot if provided
+    if train_z_shared_vars is not None and train_z_pop_vars is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_z_shared_vars, label="z_shared variance")
+        plt.plot(epochs, train_z_pop_vars,    label="z_pop variance")
+        plt.xlabel("epoch")
+        plt.ylabel("mean per-dim variance")
+        plt.title(
+            "Latent subspace variance\n"
+            "z_pop collapsing toward 0 = split not working as intended"
+        )
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/latent_subspace_variance.png", dpi=300)
         plt.close()
 
 

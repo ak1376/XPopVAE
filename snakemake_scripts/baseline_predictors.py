@@ -31,6 +31,9 @@ python baseline_predictors.py \
 import argparse
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.linear_model import LassoLarsCV, LassoLars, LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
@@ -130,6 +133,25 @@ def evaluate(y_true, y_pred):
     }
 
 
+def plot_scatter(y_val, y_val_pred, y_test, y_test_pred, model_name, out_dir):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    for ax, y_true, y_pred, split in zip(
+        axes, [y_val, y_test], [y_val_pred, y_test_pred], ["Val", "Test"]
+    ):
+        r2 = r2_score(y_true, y_pred)
+        ax.scatter(y_true, y_pred, alpha=0.4, s=15, edgecolors="none")
+        lims = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+        ax.plot(lims, lims, "r--", linewidth=1)
+        ax.set_xlabel("True")
+        ax.set_ylabel("Predicted")
+        ax.set_title(f"{model_name} — {split}  ($R^2$={r2:.4f})")
+    fig.tight_layout()
+    fname = model_name.lower().replace(" ", "_").replace("(", "").replace(")", "") + "_scatter.png"
+    fig.savefig(out_dir / fname, dpi=150)
+    plt.close(fig)
+    print(f"  Scatter plot saved: {out_dir / fname}")
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--x_train",      required=True)
@@ -215,6 +237,7 @@ def main():
     report("Linear Regression",
            evaluate(y_val,  lr.predict(X_val)),
            evaluate(y_test, lr.predict(X_test)))
+    plot_scatter(y_val, lr.predict(X_val), y_test, lr.predict(X_test), "Linear Regression", out_dir)
 
     # -------------------------------------------------------------------------
     # 2. Ridge
@@ -231,6 +254,7 @@ def main():
            evaluate(y_val,  ridge.predict(X_val)),
            evaluate(y_test, ridge.predict(X_test)),
            extra=f"Best alpha={best_a:.4g}")
+    plot_scatter(y_val, ridge.predict(X_val), y_test, ridge.predict(X_test), "Ridge Regression", out_dir)
 
     # -------------------------------------------------------------------------
     # 3. Lasso via LassoLarsCV
@@ -249,6 +273,7 @@ def main():
            evaluate(y_val,  lasso.predict(X_val)),
            evaluate(y_test, lasso.predict(X_test)),
            extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}")
+    plot_scatter(y_val, lasso.predict(X_val), y_test, lasso.predict(X_test), "Lasso LassoLarsCV", out_dir)
 
     # -------------------------------------------------------------------------
     # 4. gBLUP — lambda always CV-selected, h2 only centers the search range
@@ -260,6 +285,7 @@ def main():
            evaluate(y_val,  gblup.predict(X_val)),
            evaluate(y_test, gblup.predict(X_test)),
            extra=f"CV lambda={gblup.lambda_:.4g}  (h2={args.h2})")
+    plot_scatter(y_val, gblup.predict(X_val), y_test, gblup.predict(X_test), "gBLUP", out_dir)
 
     # -------------------------------------------------------------------------
     # Summary

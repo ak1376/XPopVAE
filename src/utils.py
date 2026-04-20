@@ -210,7 +210,7 @@ def run_eval_plots(
     )
 
     return recon_metrics, pheno_metrics
-    
+
 def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> "ConvVAE":
     from src.model import ConvVAE
 
@@ -234,6 +234,7 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> "
         stride=int(vae_config["model"]["stride"]),
         padding=int(vae_config["model"]["padding"]),
         latent_dim=int(vae_config["model"]["latent_dim"]),
+        shared_dim=int(vae_config["model"]["shared_dim"]),
         use_batchnorm=bool(vae_config["model"].get("use_batchnorm", False)),
         activation=vae_config["model"].get("activation", "elu"),
         pheno_dim=1,

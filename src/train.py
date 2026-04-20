@@ -73,10 +73,18 @@ def train_one_epoch(
     model.set_grl_lambda() before each epoch — use compute_grl_lambda()
     in run_vae.py for the Ganin et al. warmup schedule.
 
+    Latent subspace diagnostics
+    ---------------------------
+    Each epoch we track the average per-dimension variance of z_shared
+    and z_pop across all batches. If z_pop_var trends to zero, the encoder
+    is collapsing the population-specific subspace into z_shared, meaning
+    the split is not working as intended.
+
     Returns
     -------
-    Tuple of 7 floats:
-        total_loss, recon_unmasked, recon_masked, kl, pheno, domain_ce, domain_acc
+    Tuple of 9 floats:
+        total_loss, recon_unmasked, recon_masked, kl, pheno,
+        domain_ce, domain_acc, z_shared_var, z_pop_var
     """
     model.train()
 
@@ -87,6 +95,9 @@ def train_one_epoch(
     total_phenotype_loss = 0.0
     total_domain_loss    = 0.0
     total_domain_acc     = 0.0
+    total_z_shared_var   = 0.0
+    has_z_pop            = model.shared_dim < model.latent_dim
+    total_z_pop_var      = 0.0 if has_z_pop else None
 
     for x, pheno, pop_label in dataloader:
         x         = x.to(device)
@@ -107,6 +118,12 @@ def train_one_epoch(
 
         out, mu, logvar, z, pheno_pred, domain_logits = model(input_x)
         targets = x.squeeze(1).long()
+
+        # latent subspace diagnostics — logged every batch, averaged over epoch
+        stats = model.latent_stats(mu)
+        total_z_shared_var += stats["z_shared_var"]
+        if has_z_pop:
+            total_z_pop_var += stats["z_pop_var"]
 
         recon_unmasked = recon_unmasked_loss(out, targets, mask)
         recon_masked_l = recon_masked_loss(out, targets, mask)
@@ -129,7 +146,7 @@ def train_one_epoch(
         )
 
         # ------------------------------------------------------------------
-        # GRL domain loss (imported from loss.py)
+        # GRL domain loss
         # ------------------------------------------------------------------
         if use_grl and domain_logits is not None:
             d_loss = domain_loss(domain_logits, pop_label)
@@ -165,6 +182,8 @@ def train_one_epoch(
         total_phenotype_loss / n,
         total_domain_loss    / n,
         total_domain_acc     / n,
+        total_z_shared_var   / n,
+        total_z_pop_var / n if has_z_pop else None,
     )
 
 

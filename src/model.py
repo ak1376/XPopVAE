@@ -38,6 +38,35 @@ class GradientReversalLayer(nn.Module):
 # =============================================================================
 
 class ConvVAE(nn.Module):
+    """
+    Convolutional VAE with a split latent space for domain adaptation.
+
+    The latent vector mu (shape: latent_dim) is partitioned into two halves:
+
+        mu = [ z_shared (shared_dim) | z_pop (latent_dim - shared_dim) ]
+
+        z_shared: domain-invariant subspace.
+                  Used by the phenotype head and the GRL domain classifier.
+                  The GRL pushes z_shared to be indistinguishable across domains,
+                  so phenotype prediction is forced to rely only on features
+                  that generalise across populations.
+
+        z_pop:    population-specific subspace.
+                  Free to encode LD structure, allele frequency differences,
+                  and other population-specific signals needed for reconstruction.
+                  Not seen by the phenotype head or the GRL.
+
+        decoder:  receives the full z (reparameterized from the full mu/logvar),
+                  so reconstruction can use both subspaces.
+
+    Parameters
+    ----------
+    shared_dim : int or None
+        Number of dimensions in z_shared. Defaults to latent_dim // 2.
+        Must be <= latent_dim. Set to latent_dim to recover the original
+        (unsplit) behaviour.
+    """
+
     def __init__(
         self,
         input_length,
@@ -56,6 +85,8 @@ class ConvVAE(nn.Module):
         use_grl: bool = False,
         grl_hidden_dim: int = 256,
         num_domains: int = 2,
+        # --- split latent space ---
+        shared_dim: int = None,
     ):
         super().__init__()
 
@@ -71,6 +102,12 @@ class ConvVAE(nn.Module):
         self.activation = activation
         self.use_grl = use_grl
         self.encoder_lengths = [input_length]
+
+        # shared_dim defaults to half the latent space
+        self.shared_dim = shared_dim if shared_dim is not None else latent_dim // 2
+        assert self.shared_dim <= latent_dim, (
+            f"shared_dim ({self.shared_dim}) must be <= latent_dim ({latent_dim})"
+        )
 
         # ------------------------------------------------------------------
         # Encoder
@@ -109,27 +146,27 @@ class ConvVAE(nn.Module):
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
         # ------------------------------------------------------------------
-        # Phenotype head
+        # Phenotype head  (z_shared only)
         # ------------------------------------------------------------------
         if pheno_hidden_dim is None:
-            self.pheno_head = nn.Linear(latent_dim, pheno_dim)
+            self.pheno_head = nn.Linear(self.shared_dim, pheno_dim)
         else:
             self.pheno_head = nn.Sequential(
-                nn.Linear(latent_dim, pheno_hidden_dim),
+                nn.Linear(self.shared_dim, pheno_hidden_dim),
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
 
         # ------------------------------------------------------------------
-        # Domain classifier (with GRL)
+        # Domain classifier (z_shared only, through GRL)
         # ------------------------------------------------------------------
         if use_grl:
             self.grl = GradientReversalLayer(lambda_=1.0)
             if grl_hidden_dim is None:
-                self.domain_classifier = nn.Linear(latent_dim, num_domains)
+                self.domain_classifier = nn.Linear(self.shared_dim, num_domains)
             else:
                 self.domain_classifier = nn.Sequential(
-                    nn.Linear(latent_dim, grl_hidden_dim),
+                    nn.Linear(self.shared_dim, grl_hidden_dim),
                     self._get_activation(),
                     nn.Linear(grl_hidden_dim, num_domains),
                 )
@@ -138,7 +175,7 @@ class ConvVAE(nn.Module):
             self.domain_classifier = None
 
         # ------------------------------------------------------------------
-        # Decoder
+        # Decoder  (full z — unchanged)
         # ------------------------------------------------------------------
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
@@ -147,7 +184,7 @@ class ConvVAE(nn.Module):
         current_length   = self.encoder_lengths[-1]
 
         for i, target_length in enumerate(target_lengths):
-            is_last    = i == len(target_lengths) - 1
+            is_last     = i == len(target_lengths) - 1
             current_out = decoder_channels[i + 1] if not is_last else num_classes
 
             base_length    = (current_length - 1) * stride - 2 * padding + kernel_size
@@ -208,6 +245,24 @@ class ConvVAE(nn.Module):
         if self.grl is not None:
             self.grl.set_lambda(lambda_)
 
+    def latent_stats(self, mu: torch.Tensor) -> dict:
+        """
+        Returns variance diagnostics for the two latent subspaces.
+        Log these each epoch to check that z_pop doesn't collapse.
+
+        Usage in training loop:
+            stats = model.latent_stats(mu)
+            log('z_shared_var', stats['z_shared_var'])
+            log('z_pop_var',    stats['z_pop_var'])
+        """
+        z_shared = mu[:, :self.shared_dim]
+        z_pop    = mu[:, self.shared_dim:]
+        z_pop_var = z_pop.var(dim=0).mean().item() if z_pop.shape[1] > 0 else None
+        return {
+            "z_shared_var": z_shared.var(dim=0).mean().item(),
+            "z_pop_var":    z_pop_var,
+        }
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
@@ -217,11 +272,11 @@ class ConvVAE(nn.Module):
         Returns
         -------
         out          : (B, num_classes, L)  decoder logits
-        mu           : (B, latent_dim)
-        logvar       : (B, latent_dim)
-        z            : (B, latent_dim)
-        pheno_pred   : (B, 1)
-        domain_logits: (B, num_domains) if use_grl else None
+        mu           : (B, latent_dim)      full posterior mean
+        logvar       : (B, latent_dim)      full posterior log-variance
+        z            : (B, latent_dim)      reparameterized sample (used by decoder)
+        pheno_pred   : (B, pheno_dim)       predicted from z_shared = mu[:, :shared_dim]
+        domain_logits: (B, num_domains)     predicted from GRL(z_shared), or None
         """
         if verbose:
             print(f"Input: {x.shape}")
@@ -241,17 +296,24 @@ class ConvVAE(nn.Module):
         logvar = torch.clamp(logvar, min=-6.0, max=6.0)
         z      = self.reparameterize(mu, logvar)
 
-        # Phenotype prediction from mu (deterministic path)
-        pheno_pred = self.pheno_head(mu)
+        # ── Split mu into the two subspaces ───────────────────────────────
+        # z_shared: domain-invariant, used for phenotype + GRL
+        # z_pop:    population-specific, only used implicitly via full z in decoder
+        z_shared = mu[:, :self.shared_dim]   # (B, shared_dim)
+        # z_pop  = mu[:, self.shared_dim:]   # (B, latent_dim - shared_dim)
+        #   not needed explicitly here — decoder uses full z
 
-        # Domain classification through reversed gradients
+        # Phenotype prediction from z_shared (deterministic path)
+        pheno_pred = self.pheno_head(z_shared)
+
+        # Domain classification through reversed gradients on z_shared only
         if self.use_grl:
-            z_rev         = self.grl(mu)          # gradient sign flipped here
-            domain_logits = self.domain_classifier(z_rev)
+            z_shared_rev  = self.grl(z_shared)
+            domain_logits = self.domain_classifier(z_shared_rev)
         else:
             domain_logits = None
 
-        # Decoder
+        # Decoder — full z, unchanged
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
         out   = h_dec

@@ -94,6 +94,7 @@ def main(
     stride           = int(vae_config["model"]["stride"])
     padding          = int(vae_config["model"]["padding"])
     latent_dim       = int(vae_config["model"]["latent_dim"])
+    shared_dim       = vae_config["model"].get("shared_dim", None)  # defaults to latent_dim // 2
 
     # ------------------------------------------------------------------
     # hyperparameters — training
@@ -134,6 +135,7 @@ def main(
     print(f"GRL enabled: {use_grl}"
           + (f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
              if use_grl else ""))
+    print(f"Latent dim: {latent_dim}  shared_dim: {shared_dim if shared_dim is not None else latent_dim // 2} (default)")
 
     # ------------------------------------------------------------------
     # load genotypes
@@ -201,7 +203,6 @@ def main(
         out_dir=out, split_name="discovery_train",
     )
 
-    # target_train: only build if non-empty
     target_train_loader = make_eval_loader(
         geno=target_train_dataset,
         pheno_norm=target_train_pheno_norm,
@@ -220,7 +221,7 @@ def main(
         out_dir=out, split_name="discovery_validation",
     )
 
-    # target_held_out: always build if file exists — this is the primary YRI eval
+    # target_held_out: always build if file exists
     held_out_geno_path  = target_train_data_path.parent / "target_held_out.npy"
     held_out_pheno_path = target_train_data_path.parent.parent / "phenotypes" / "target_held_out_pheno.npy"
 
@@ -280,9 +281,11 @@ def main(
         use_grl=use_grl,
         grl_hidden_dim=grl_hidden_dim,
         num_domains=2,
+        shared_dim=shared_dim,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Latent split: z_shared={model.shared_dim}  z_pop={latent_dim - model.shared_dim}")
 
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
@@ -308,6 +311,8 @@ def main(
     train_phenotype_loss_list                  = []
     train_domain_loss_list                     = []
     train_domain_acc_list                      = []
+    train_z_shared_var_list                    = []
+    train_z_pop_var_list                       = []
 
     val_loss_list, val_recon_unmasked_list     = [], []
     val_recon_masked_list, val_kl_list         = [], []
@@ -331,7 +336,8 @@ def main(
             grl_lam = 0.0
 
         (train_loss, train_recon_unmasked, train_recon_masked,
-         train_kl, train_pheno, train_domain, train_d_acc) = train_one_epoch(
+         train_kl, train_pheno, train_domain, train_d_acc,
+         train_z_shared_var, train_z_pop_var) = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -369,6 +375,8 @@ def main(
         train_phenotype_loss_list.append(train_pheno)
         train_domain_loss_list.append(train_domain)
         train_domain_acc_list.append(train_d_acc)
+        train_z_shared_var_list.append(train_z_shared_var)
+        train_z_pop_var_list.append(train_z_pop_var)
 
         val_loss_list.append(val_loss)
         val_recon_unmasked_list.append(val_recon_unmasked)
@@ -376,8 +384,10 @@ def main(
         val_kl_list.append(val_kl)
         val_phenotype_loss_list.append(val_pheno)
 
-        grl_str = (f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
-                   f"  domain_acc={train_d_acc:.3f}") if use_grl else ""
+        grl_str = (
+            f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
+            f"  domain_acc={train_d_acc:.3f}"
+        ) if use_grl else ""
 
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
@@ -385,6 +395,8 @@ def main(
             f"train_recon={train_recon_unmasked:.6f} | train_pheno={train_pheno:.6f} | "
             f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
             + grl_str
+            + f" | z_shared_var={train_z_shared_var:.4f}"
+            + (f"  z_pop_var={train_z_pop_var:.4f}" if train_z_pop_var is not None else "")
         )
 
         if val_stop_metric < (best_val_stop_metric - min_delta):
@@ -436,6 +448,8 @@ def main(
         val_phenotype_losses         = np.array(val_phenotype_loss_list),
         train_recon_masked_losses    = np.array(train_recon_masked_list),
         val_recon_masked_losses      = np.array(val_recon_masked_list),
+        train_z_shared_var           = np.array(train_z_shared_var_list),
+        **({"train_z_pop_var": np.array(train_z_pop_var_list)} if train_z_pop_var_list[0] is not None else {}),
     )
     if use_grl:
         history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
@@ -456,6 +470,8 @@ def main(
         val_recon_masked_losses=val_recon_masked_list     if masking else None,
         train_domain_losses=train_domain_loss_list if use_grl else None,
         train_domain_accs=train_domain_acc_list    if use_grl else None,
+        train_z_shared_vars=train_z_shared_var_list,
+        train_z_pop_vars=train_z_pop_var_list if train_z_pop_var_list[0] is not None else None,
         output_dir=out,
     )
 
@@ -489,7 +505,6 @@ def main(
             alpha=alpha, beta=beta, gamma=gamma,
         )
 
-    # always evaluate target_held_out if loader was built
     if target_held_out_loader is not None:
         run_eval_plots(
             model=model, loader=target_held_out_loader, device=device,
@@ -569,7 +584,6 @@ def main(
         )
 
     if yri_latent is not None:
-        # plot 1: coloured by population
         plot_latent_pca_shared_basis(
             reference_vecs=disc_train_latent,
             ceu_vecs=val_latent,
@@ -582,7 +596,6 @@ def main(
             pca=shared_pca,
         )
 
-        # plot 2: coloured by true phenotype
         plot_latent_pca_shared_basis(
             reference_vecs=disc_train_latent,
             ceu_vecs=val_latent,
@@ -598,7 +611,6 @@ def main(
             pca=shared_pca,
         )
 
-        # plot 3: coloured by predicted phenotype
         plot_latent_pca_shared_basis(
             reference_vecs=disc_train_latent,
             ceu_vecs=val_latent,
@@ -613,6 +625,8 @@ def main(
             scaler=shared_scaler,
             pca=shared_pca,
         )
+
+
 # =============================================================================
 # CLI
 # =============================================================================
