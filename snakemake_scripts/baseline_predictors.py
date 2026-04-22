@@ -32,6 +32,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,23 +40,23 @@ from sklearn.linear_model import LassoLarsCV, LassoLars, LinearRegression, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-
 # ---------------------------------------------------------------------------
 # gBLUP
 # ---------------------------------------------------------------------------
 
+
 def build_grm(X: np.ndarray) -> np.ndarray:
     """VanRaden (2008) GRM: G = WW' / [2 * sum p(1-p)]"""
-    p     = X.mean(axis=0) / 2.0
-    W     = X - 2 * p
+    p = X.mean(axis=0) / 2.0
+    W = X - 2 * p
     denom = 2.0 * np.sum(p * (1.0 - p))
     return (W @ W.T) / denom
 
 
 def build_cross_grm(X_new, X_train, p):
-    W_new   = X_new   - 2 * p
+    W_new = X_new - 2 * p
     W_train = X_train - 2 * p
-    denom   = 2.0 * np.sum(p * (1.0 - p))
+    denom = 2.0 * np.sum(p * (1.0 - p))
     return (W_new @ W_train.T) / denom
 
 
@@ -74,9 +75,9 @@ class GBLUPPredictor:
     def __init__(self, h2=1.0):
         self.h2 = h2
         self.lambda_ = None
-        self.alpha_  = None
-        self.mu_     = None
-        self.p_      = None
+        self.alpha_ = None
+        self.mu_ = None
+        self.p_ = None
         self.X_train_ = None
 
     def _solve(self, G, y_c, lam):
@@ -93,11 +94,11 @@ class GBLUPPredictor:
         return np.logspace(log_center - 3, log_center + 3, n)
 
     def fit(self, X_train, y_train, X_val, y_val):
-        self.mu_       = y_train.mean()
-        self.p_        = X_train.mean(axis=0) / 2.0
-        self.X_train_  = X_train.copy()
+        self.mu_ = y_train.mean()
+        self.p_ = X_train.mean(axis=0) / 2.0
+        self.X_train_ = X_train.copy()
 
-        G   = build_grm(X_train)
+        G = build_grm(X_train)
         y_c = y_train - self.mu_
 
         G_cv = build_cross_grm(X_val, X_train, self.p_)
@@ -111,10 +112,12 @@ class GBLUPPredictor:
                 best_r2, best_lam = r2, lam
 
         self.lambda_ = best_lam
-        self.alpha_  = self._solve(G, y_c, self.lambda_)
+        self.alpha_ = self._solve(G, y_c, self.lambda_)
 
-        print(f"  gBLUP CV: best lambda={self.lambda_:.4g}, val R²={best_r2:.4f}  "
-              f"(searched {len(lambdas)} values, h2={self.h2})")
+        print(
+            f"  gBLUP CV: best lambda={self.lambda_:.4g}, val R²={best_r2:.4f}  "
+            f"(searched {len(lambdas)} values, h2={self.h2})"
+        )
         return self
 
     def predict(self, X_new):
@@ -125,10 +128,11 @@ class GBLUPPredictor:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def evaluate(y_true, y_pred):
     return {
-        "r2":   r2_score(y_true, y_pred),
-        "mse":  mean_squared_error(y_true, y_pred),
+        "r2": r2_score(y_true, y_pred),
+        "mse": mean_squared_error(y_true, y_pred),
         "rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
     }
 
@@ -146,7 +150,10 @@ def plot_scatter(y_val, y_val_pred, y_test, y_test_pred, model_name, out_dir):
         ax.set_ylabel("Predicted")
         ax.set_title(f"{model_name} — {split}  ($R^2$={r2:.4f})")
     fig.tight_layout()
-    fname = model_name.lower().replace(" ", "_").replace("(", "").replace(")", "") + "_scatter.png"
+    fname = (
+        model_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
+        + "_scatter.png"
+    )
     fig.savefig(out_dir / fname, dpi=150)
     plt.close(fig)
     print(f"  Scatter plot saved: {out_dir / fname}")
@@ -154,27 +161,37 @@ def plot_scatter(y_val, y_val_pred, y_test, y_test_pred, model_name, out_dir):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--x_train",      required=True)
-    p.add_argument("--y_train",      required=True)
-    p.add_argument("--x_val",        required=True)
-    p.add_argument("--y_val",        required=True)
-    p.add_argument("--x_test",       required=True)
-    p.add_argument("--y_test",       required=True)
-    p.add_argument("--out_dir",      default="results/baselines")
-    p.add_argument("--h2",           type=float, default=1.0,
-                   help="True heritability (used to center gBLUP lambda search range)")
-    p.add_argument("--seed",         type=int,   default=42)
-    p.add_argument("--standardize",  action="store_true")
-    p.add_argument("--n_jobs",       type=int,   default=-1,
-                   help="Parallel jobs for LassoLarsCV (-1 = all cores)")
-    p.add_argument("--max_n_alphas", type=int,   default=100,
-                   help="Max alphas on the LARS path")
+    p.add_argument("--x_train", required=True)
+    p.add_argument("--y_train", required=True)
+    p.add_argument("--x_val", required=True)
+    p.add_argument("--y_val", required=True)
+    p.add_argument("--x_test", required=True)
+    p.add_argument("--y_test", required=True)
+    p.add_argument("--out_dir", default="results/baselines")
+    p.add_argument(
+        "--h2",
+        type=float,
+        default=1.0,
+        help="True heritability (used to center gBLUP lambda search range)",
+    )
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--standardize", action="store_true")
+    p.add_argument(
+        "--n_jobs",
+        type=int,
+        default=-1,
+        help="Parallel jobs for LassoLarsCV (-1 = all cores)",
+    )
+    p.add_argument(
+        "--max_n_alphas", type=int, default=100, help="Max alphas on the LARS path"
+    )
     return p.parse_args()
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -183,17 +200,17 @@ def main():
     print("Loading data...")
     X_train = np.load(args.x_train)
     y_train = np.load(args.y_train)
-    X_val   = np.load(args.x_val)
-    y_val   = np.load(args.y_val)
-    X_test  = np.load(args.x_test)
-    y_test  = np.load(args.y_test)
+    X_val = np.load(args.x_val)
+    y_val = np.load(args.y_val)
+    X_test = np.load(args.x_test)
+    y_test = np.load(args.y_test)
     print(f"  Train {X_train.shape}  Val {X_val.shape}  Test {X_test.shape}")
 
     if args.standardize:
-        scaler  = StandardScaler()
+        scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
-        X_val   = scaler.transform(X_val)
-        X_test  = scaler.transform(X_test)
+        X_val = scaler.transform(X_val)
+        X_test = scaler.transform(X_test)
         print("  SNPs standardized.")
 
     # train+val combined for Lasso CV
@@ -225,8 +242,12 @@ def main():
         log(f"--- {name} ---")
         if extra:
             log(f"  {extra}")
-        log(f"  Val  R2={val_m['r2']:.4f}  RMSE={val_m['rmse']:.4f}  MSE={val_m['mse']:.4f}")
-        log(f"  Test R2={test_m['r2']:.4f}  RMSE={test_m['rmse']:.4f}  MSE={test_m['mse']:.4f}")
+        log(
+            f"  Val  R2={val_m['r2']:.4f}  RMSE={val_m['rmse']:.4f}  MSE={val_m['mse']:.4f}"
+        )
+        log(
+            f"  Test R2={test_m['r2']:.4f}  RMSE={test_m['rmse']:.4f}  MSE={test_m['mse']:.4f}"
+        )
         log()
 
     # -------------------------------------------------------------------------
@@ -234,10 +255,19 @@ def main():
     # -------------------------------------------------------------------------
     log("Fitting Linear Regression...")
     lr = LinearRegression().fit(X_train, y_train)
-    report("Linear Regression",
-           evaluate(y_val,  lr.predict(X_val)),
-           evaluate(y_test, lr.predict(X_test)))
-    plot_scatter(y_val, lr.predict(X_val), y_test, lr.predict(X_test), "Linear Regression", out_dir)
+    report(
+        "Linear Regression",
+        evaluate(y_val, lr.predict(X_val)),
+        evaluate(y_test, lr.predict(X_test)),
+    )
+    plot_scatter(
+        y_val,
+        lr.predict(X_val),
+        y_test,
+        lr.predict(X_test),
+        "Linear Regression",
+        out_dir,
+    )
 
     # -------------------------------------------------------------------------
     # 2. Ridge
@@ -250,30 +280,48 @@ def main():
             best_r2, best_a = r2, a
 
     ridge = Ridge(alpha=best_a).fit(X_train, y_train)
-    report("Ridge Regression",
-           evaluate(y_val,  ridge.predict(X_val)),
-           evaluate(y_test, ridge.predict(X_test)),
-           extra=f"Best alpha={best_a:.4g}")
-    plot_scatter(y_val, ridge.predict(X_val), y_test, ridge.predict(X_test), "Ridge Regression", out_dir)
+    report(
+        "Ridge Regression",
+        evaluate(y_val, ridge.predict(X_val)),
+        evaluate(y_test, ridge.predict(X_test)),
+        extra=f"Best alpha={best_a:.4g}",
+    )
+    plot_scatter(
+        y_val,
+        ridge.predict(X_val),
+        y_test,
+        ridge.predict(X_test),
+        "Ridge Regression",
+        out_dir,
+    )
 
     # -------------------------------------------------------------------------
     # 3. Lasso via LassoLarsCV
     # -------------------------------------------------------------------------
     log("Fitting Lasso via LassoLarsCV...")
     llcv = LassoLarsCV(
-        cv           = 5,
-        max_n_alphas = args.max_n_alphas,
-        n_jobs       = args.n_jobs,
+        cv=5,
+        max_n_alphas=args.max_n_alphas,
+        n_jobs=args.n_jobs,
     ).fit(X_tv, y_tv)
 
     # refit on train only with CV-chosen alpha for fair val evaluation
     lasso = LassoLars(alpha=llcv.alpha_).fit(X_train, y_train)
-    n_nz  = int(np.sum(lasso.coef_ != 0))
-    report("Lasso (LassoLarsCV)",
-           evaluate(y_val,  lasso.predict(X_val)),
-           evaluate(y_test, lasso.predict(X_test)),
-           extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}")
-    plot_scatter(y_val, lasso.predict(X_val), y_test, lasso.predict(X_test), "Lasso LassoLarsCV", out_dir)
+    n_nz = int(np.sum(lasso.coef_ != 0))
+    report(
+        "Lasso (LassoLarsCV)",
+        evaluate(y_val, lasso.predict(X_val)),
+        evaluate(y_test, lasso.predict(X_test)),
+        extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}",
+    )
+    plot_scatter(
+        y_val,
+        lasso.predict(X_val),
+        y_test,
+        lasso.predict(X_test),
+        "Lasso LassoLarsCV",
+        out_dir,
+    )
 
     # -------------------------------------------------------------------------
     # 4. gBLUP — lambda always CV-selected, h2 only centers the search range
@@ -281,11 +329,15 @@ def main():
     log("Fitting gBLUP (CV lambda)...")
     gblup = GBLUPPredictor(h2=args.h2)
     gblup.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-    report("gBLUP",
-           evaluate(y_val,  gblup.predict(X_val)),
-           evaluate(y_test, gblup.predict(X_test)),
-           extra=f"CV lambda={gblup.lambda_:.4g}  (h2={args.h2})")
-    plot_scatter(y_val, gblup.predict(X_val), y_test, gblup.predict(X_test), "gBLUP", out_dir)
+    report(
+        "gBLUP",
+        evaluate(y_val, gblup.predict(X_val)),
+        evaluate(y_test, gblup.predict(X_test)),
+        extra=f"CV lambda={gblup.lambda_:.4g}  (h2={args.h2})",
+    )
+    plot_scatter(
+        y_val, gblup.predict(X_val), y_test, gblup.predict(X_test), "gBLUP", out_dir
+    )
 
     # -------------------------------------------------------------------------
     # Summary
@@ -294,15 +346,15 @@ def main():
     log("SUMMARY — generalisation gap (Val R2 - Test R2)")
     log("=" * 60)
     rows = [
-        ("Linear Regression",   lr.predict(X_val),    lr.predict(X_test)),
-        ("Ridge Regression",    ridge.predict(X_val), ridge.predict(X_test)),
+        ("Linear Regression", lr.predict(X_val), lr.predict(X_test)),
+        ("Ridge Regression", ridge.predict(X_val), ridge.predict(X_test)),
         ("Lasso (LassoLarsCV)", lasso.predict(X_val), lasso.predict(X_test)),
-        ("gBLUP",               gblup.predict(X_val), gblup.predict(X_test)),
+        ("gBLUP", gblup.predict(X_val), gblup.predict(X_test)),
     ]
     log(f"  {'Model':<24}  {'Val R2':>8}  {'Test R2':>8}  {'Gap':>8}")
     log(f"  {'-'*24}  {'-'*8}  {'-'*8}  {'-'*8}")
     for name, pv, pt in rows:
-        rv = r2_score(y_val,  pv)
+        rv = r2_score(y_val, pv)
         rt = r2_score(y_test, pt)
         log(f"  {name:<24}  {rv:>8.4f}  {rt:>8.4f}  {rv - rt:>8.4f}")
     log()

@@ -122,6 +122,7 @@ if VAE_GRID_ENABLED:
     for dim in VAE_GRID_DIMS:
         print(f"  grid dim: path={dim.get('path')} values={dim.get('values')} tag={dim.get('tag')}")
 
+
 # =============================================================================
 # Scripts
 # =============================================================================
@@ -133,6 +134,10 @@ COMPARE_LD_SCRIPT     = "snakemake_scripts/compare_ld_decay.py"
 DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
 BASELINE_SCRIPT       = "snakemake_scripts/baseline_predictors.py"
 
+GWAS_SCRIPT = "snakemake_scripts/run_gwas.py"
+GWAS_SUMMARY_SCRIPT = "snakemake_scripts/run_gwas_summary.py"
+ 
+GWAS_SUMMARY_DIR = Path(f"experiments/{MODEL}/gwas_summary")
 # =============================================================================
 # Directories
 # =============================================================================
@@ -140,6 +145,7 @@ BASELINE_SCRIPT       = "snakemake_scripts/baseline_predictors.py"
 SIM_BASEDIR  = Path(f"experiments/{MODEL}/simulations")
 PROC_BASEDIR = Path(f"experiments/{MODEL}/processed_data")
 VAE_BASEDIR  = Path(f"experiments/{MODEL}/vae")
+REPLICATE_DIAG_DIR = Path(f"experiments/{MODEL}/gwas_summary/sim_diagnostics")
 
 for d in (SIM_BASEDIR, PROC_BASEDIR, VAE_BASEDIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -171,7 +177,7 @@ def proc_dir(wc):
     return PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}"
 
 def exp_dir(wc):
-    return VAE_BASEDIR / wc.exp_id
+    return VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id
 
 def exp_checkpoint_dir(wc):
     return exp_dir(wc) / "vae_outputs/checkpoints"
@@ -259,35 +265,47 @@ rule all:
             PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
             sim_number=SIM_NUMBERS, replicate=REPLICATES,
         ),
-        # --- VAE checkpoints ---
         expand(
-            VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
-            exp_id=EXP_IDS,
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        GWAS_SUMMARY_DIR / "discovery_r2_vs_tooa.png",
+        GWAS_SUMMARY_DIR / "target_r2_vs_tooa.png",
+        GWAS_SUMMARY_DIR / "gwas_summary_table.csv",
+        expand(
+            REPLICATE_DIAG_DIR / "{sim_number}/af_diff_vs_r2_gap.png",
+            sim_number=SIM_NUMBERS,
+        ),
+        
+        # # # --- VAE checkpoints ---
+        expand(
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
         ),
         expand(
-            VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
-            exp_id=EXP_IDS,
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/final_model.pt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
         ),
-        # --- LD decay diagnostics ---
-        expand(
-            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-            exp_id=EXP_IDS,
-        ),
-        *(expand(
-            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-            exp_id=EXP_IDS,
-        ) if HAS_TARGET_TRAIN else []),
-        expand(
-            VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-            exp_id=EXP_IDS,
-        ),
-        # --- allele freq vs LD diagnostic ---
-        expand(
-            VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-            exp_id=EXP_IDS,
-        ),
-        # --- baselines ---
-        PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+        # # --- LD decay diagnostics ---
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # *(expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ) if HAS_TARGET_TRAIN else []),
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # # --- allele freq vs LD diagnostic ---
+        # expand(
+        #     VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+        #     exp_id=EXP_IDS,
+        # ),
+        # # --- baselines ---
+        # PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
         
 # =============================================================================
 # 1. Run one simulation
@@ -357,7 +375,94 @@ rule build_genotypes:
         python {input.script} \
             --tree {input.tree} \
             --outdir {params.outdir} \
-            --experiment-config-json {input.experiment_config}
+            --experiment-config-json {input.experiment_config} \
+            --sim-number {wildcards.sim_number} \
+            --replicate {wildcards.replicate}
+        """
+
+rule run_gwas:
+    input:
+        script            = GWAS_SCRIPT,
+        disc_train_geno   = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        disc_train_pheno  = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        disc_val_geno     = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+        disc_val_pheno    = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+        target_geno       = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+        target_pheno      = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
+    output:
+        summary           = PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
+        ridge_scatter     = PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/ridge_regression_scatter.png",
+    params:
+        out_dir           = lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / "gwas",
+    shell:
+        r"""
+        python {input.script} \
+            --disc-train-geno  {input.disc_train_geno}  \
+            --disc-train-pheno {input.disc_train_pheno} \
+            --disc-val-geno    {input.disc_val_geno}    \
+            --disc-val-pheno   {input.disc_val_pheno}   \
+            --target-geno      {input.target_geno}      \
+            --target-pheno     {input.target_pheno}     \
+            --out-dir          {params.out_dir}         \
+            --summary-out      {output.summary}
+        """
+
+rule gwas_summary:
+    input:
+        script  = GWAS_SUMMARY_SCRIPT,
+        # Depend on every gwas_summary.json so this rule waits for all GWAS jobs
+        gwas_jsons = expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        # Also depend on sampled_params so T_OOA values are available
+        sampled_params = expand(
+            SIM_BASEDIR / "{sim_number}/rep{replicate}/sampled_params.pkl",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+    output:
+        discovery_plot = GWAS_SUMMARY_DIR / "discovery_r2_vs_tooa.png",
+        target_plot    = GWAS_SUMMARY_DIR / "target_r2_vs_tooa.png",
+        csv            = GWAS_SUMMARY_DIR / "gwas_summary_table.csv",
+    params:
+        proc_basedir = PROC_BASEDIR,
+        out_dir      = GWAS_SUMMARY_DIR,
+        sim_numbers  = " ".join(SIM_NUMBERS),
+        replicates   = " ".join(REPLICATES),
+    shell:
+        r"""
+        python {input.script} \
+            --proc-basedir {params.proc_basedir} \
+            --sim-numbers  {params.sim_numbers}  \
+            --replicates   {params.replicates}   \
+            --out-dir      {params.out_dir}
+        """
+
+rule diagnose_replicates:
+    input:
+        script     = GWAS_SUMMARY_SCRIPT,
+        gwas_jsons = lambda wc: expand(
+            PROC_BASEDIR / wc.sim_number / "rep{replicate}/gwas/gwas_summary.json",
+            replicate=REPLICATES,
+        ),
+        sampled_params = lambda wc: expand(
+            SIM_BASEDIR / wc.sim_number / "rep{replicate}/sampled_params.pkl",
+            replicate=REPLICATES,
+        ),
+    output:
+        plot = REPLICATE_DIAG_DIR / "{sim_number}/af_diff_vs_r2_gap.png",
+        csv  = REPLICATE_DIAG_DIR / "{sim_number}/replicate_stats.csv",
+    params:
+        out_dir    = lambda wc: REPLICATE_DIAG_DIR / wc.sim_number,
+        replicates = " ".join(REPLICATES),
+    shell:
+        r"""
+        python {input.script} \
+            --proc-basedir {PROC_BASEDIR} \
+            --sim-numbers  {wildcards.sim_number} \
+            --replicates   {params.replicates} \
+            --out-dir      {params.out_dir} \
+            --af-diff-plot
         """
 # =============================================================================
 # 3. Write resolved VAE config
@@ -367,7 +472,7 @@ rule write_vae_config:
     input:
         source_config=VAE_YAML_PATH,
     output:
-        config=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
+        config=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/resolved_vae_config.yaml",
     run:
         exp_id = wildcards.exp_id
         cfg    = copy.deepcopy(EXPERIMENTS[exp_id]["config"])
@@ -376,39 +481,38 @@ rule write_vae_config:
         with open(output.config, "w") as f:
             yaml.safe_dump(cfg, f, sort_keys=False)
 
-
 # =============================================================================
 # 4. Train VAE
 # =============================================================================
 
 rule train_vae:
     input:
-        vae_yaml=VAE_BASEDIR / "{exp_id}/resolved_vae_config.yaml",
+        vae_yaml=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/resolved_vae_config.yaml",
         script=TRAIN_VAE_SCRIPT,
-        # genotypes
-        training_data=PROC_BASEDIR / "0/rep0/genotype_matrices/training.npy",
-        disc_train_data=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_train.npy",
-        target_train_data=PROC_BASEDIR / "0/rep0/genotype_matrices/target_train.npy",
-        validation_data=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy",
+        # genotypes — now use wildcards instead of hardcoded 0/rep0
+        training_data   = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
+        disc_train_data = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        target_train_data = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
+        validation_data = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
         # phenotypes
-        disc_train_pheno=PROC_BASEDIR / "0/rep0/phenotypes/discovery_train_pheno.npy",
-        target_train_pheno=PROC_BASEDIR / "0/rep0/phenotypes/target_train_pheno.npy",
-        validation_pheno=PROC_BASEDIR / "0/rep0/phenotypes/discovery_validation_pheno.npy",
+        disc_train_pheno  = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        target_train_pheno = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
+        validation_pheno  = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
     output:
-        best_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
-        final_model=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/final_model.pt",
-        history=VAE_BASEDIR / "{exp_id}/vae_outputs/training_history.npz",
-        disc_train_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
-        val_plots=VAE_BASEDIR / "{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
-        snap_training=VAE_BASEDIR / "{exp_id}/training_inputs/training.npy",
-        snap_disc_train=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train.npy",
-        snap_target_train=VAE_BASEDIR / "{exp_id}/training_inputs/target_train.npy",
-        snap_val=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_validation.npy",
-        snap_disc_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_train_pheno.npy",
-        snap_target_train_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/target_train_pheno.npy",
-        snap_val_pheno=VAE_BASEDIR / "{exp_id}/training_inputs/discovery_validation_pheno.npy",
+        best_model  = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        final_model = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/final_model.pt",
+        history     = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/training_history.npz",
+        disc_train_plots = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/plots/discovery_train/latent_space.png",
+        val_plots        = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/plots/discovery_validation/latent_space.png",
+        snap_training         = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/training.npy",
+        snap_disc_train       = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/discovery_train.npy",
+        snap_target_train     = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/target_train.npy",
+        snap_val              = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/discovery_validation.npy",
+        snap_disc_train_pheno = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/discovery_train_pheno.npy",
+        snap_target_train_pheno = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/target_train_pheno.npy",
+        snap_val_pheno        = VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/training_inputs/discovery_validation_pheno.npy",
     params:
-        outdir=lambda wc: VAE_BASEDIR / wc.exp_id,
+        outdir=lambda wc: VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id,
     shell:
         r"""
         python {input.script} \
@@ -423,13 +527,13 @@ rule train_vae:
             --outputs             {params.outdir}
 
         mkdir -p {params.outdir}/training_inputs
-        cp {input.training_data}      {output.snap_training}
-        cp {input.disc_train_data}    {output.snap_disc_train}
-        cp {input.target_train_data}  {output.snap_target_train}
-        cp {input.validation_data}    {output.snap_val}
-        cp {input.disc_train_pheno}   {output.snap_disc_train_pheno}
-        cp {input.target_train_pheno} {output.snap_target_train_pheno}
-        cp {input.validation_pheno}   {output.snap_val_pheno}
+        cp {input.training_data}       {output.snap_training}
+        cp {input.disc_train_data}     {output.snap_disc_train}
+        cp {input.target_train_data}   {output.snap_target_train}
+        cp {input.validation_data}     {output.snap_val}
+        cp {input.disc_train_pheno}    {output.snap_disc_train_pheno}
+        cp {input.target_train_pheno}  {output.snap_target_train_pheno}
+        cp {input.validation_pheno}    {output.snap_val_pheno}
         """
 
 # =============================================================================

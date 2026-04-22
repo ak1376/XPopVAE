@@ -10,8 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-
-'''
+"""
 python snakemake_scripts/compute_sfs.py \
     --checkpoint /sietch_colab/akapoor/XPopVAE/experiments/OOA/vae/default/vae_outputs/checkpoints/best_model.pt \
     --ceu-genotype-npy /sietch_colab/akapoor/XPopVAE/experiments/OOA/processed_data/0/rep0/genotype_matrices/discovery_train.npy \
@@ -21,8 +20,7 @@ python snakemake_scripts/compute_sfs.py \
 
 
 
-'''
-
+"""
 
 
 # ------------------------------------------------------------------
@@ -133,19 +131,35 @@ def plot_sfs_comparison(
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
         width = (bin_centers[1] - bin_centers[0]) * 0.4 if n_bins_actual > 1 else 1.0
 
-        truth_binned = np.array([
-            sfs_truth[bin_edges[i]:bin_edges[i + 1]].sum()
-            for i in range(n_bins_actual)
-        ])
-        recon_binned = np.array([
-            sfs_recon[bin_edges[i]:bin_edges[i + 1]].sum()
-            for i in range(n_bins_actual)
-        ])
+        truth_binned = np.array(
+            [
+                sfs_truth[bin_edges[i] : bin_edges[i + 1]].sum()
+                for i in range(n_bins_actual)
+            ]
+        )
+        recon_binned = np.array(
+            [
+                sfs_recon[bin_edges[i] : bin_edges[i + 1]].sum()
+                for i in range(n_bins_actual)
+            ]
+        )
 
-        ax.bar(bin_centers - width / 2, truth_binned, width=width,
-               color="steelblue", alpha=0.8, label="truth")
-        ax.bar(bin_centers + width / 2, recon_binned, width=width,
-               color="darkorange", alpha=0.8, label="reconstructed")
+        ax.bar(
+            bin_centers - width / 2,
+            truth_binned,
+            width=width,
+            color="steelblue",
+            alpha=0.8,
+            label="truth",
+        )
+        ax.bar(
+            bin_centers + width / 2,
+            recon_binned,
+            width=width,
+            color="darkorange",
+            alpha=0.8,
+            label="reconstructed",
+        )
 
         ax.set_yscale("log")
         ax.set_xlabel("Derived allele count")
@@ -160,6 +174,7 @@ def plot_sfs_comparison(
     plt.close(fig)
     print(f"Saved SFS comparison plot to: {output_path}")
 
+
 def compute_sfs_metrics(
     sfs_truth: np.ndarray,
     sfs_recon: np.ndarray,
@@ -169,8 +184,8 @@ def compute_sfs_metrics(
     r = sfs_recon[1:-1].astype(float)
 
     diff = r - t
-    mae  = float(np.mean(np.abs(diff)))
-    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    mae = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff**2)))
     bias = float(np.mean(diff))
 
     total = t.sum()
@@ -237,11 +252,17 @@ def main():
 
     print("Reconstructing CEU genotypes...")
     G_ceu_recon = reconstruct_argmax_genotypes(
-        model=model, G=G_ceu_truth, device=device, batch_size=args.batch_size,
+        model=model,
+        G=G_ceu_truth,
+        device=device,
+        batch_size=args.batch_size,
     )
     print("Reconstructing YRI genotypes...")
     G_yri_recon = reconstruct_argmax_genotypes(
-        model=model, G=G_yri_truth, device=device, batch_size=args.batch_size,
+        model=model,
+        G=G_yri_truth,
+        device=device,
+        batch_size=args.batch_size,
     )
 
     np.save(args.output_dir / "reconstructed_ceu_argmax.npy", G_ceu_recon)
@@ -258,7 +279,7 @@ def main():
     np.save(args.output_dir / "sfs_yri_truth.npy", sfs_yri_truth)
     np.save(args.output_dir / "sfs_yri_recon.npy", sfs_yri_recon)
 
-    print(f'[DEBUG]')
+    print(f"[DEBUG]")
     print("CEU truth first 10 counts:", sfs_ceu_truth[1:11])
     print("CEU recon first 10 counts:", sfs_ceu_recon[1:11])
 
@@ -277,10 +298,14 @@ def main():
 
     np.savez(
         args.output_dir / "sfs_metrics.npz",
-        ceu_mae=metrics_ceu["mae"],   ceu_rmse=metrics_ceu["rmse"],
-        ceu_bias=metrics_ceu["bias"], ceu_kl=metrics_ceu["kl_div"],
-        yri_mae=metrics_yri["mae"],   yri_rmse=metrics_yri["rmse"],
-        yri_bias=metrics_yri["bias"], yri_kl=metrics_yri["kl_div"],
+        ceu_mae=metrics_ceu["mae"],
+        ceu_rmse=metrics_ceu["rmse"],
+        ceu_bias=metrics_ceu["bias"],
+        ceu_kl=metrics_ceu["kl_div"],
+        yri_mae=metrics_yri["mae"],
+        yri_rmse=metrics_yri["rmse"],
+        yri_bias=metrics_yri["bias"],
+        yri_kl=metrics_yri["kl_div"],
     )
 
     save_summary(
@@ -293,8 +318,12 @@ def main():
         metrics_yri=metrics_yri,
     )
 
-    print(f"[{args.label}] CEU SFS — MAE={metrics_ceu['mae']:.6f}  KL={metrics_ceu['kl_div']:.6f}")
-    print(f"[{args.label}] YRI SFS — MAE={metrics_yri['mae']:.6f}  KL={metrics_yri['kl_div']:.6f}")
+    print(
+        f"[{args.label}] CEU SFS — MAE={metrics_ceu['mae']:.6f}  KL={metrics_ceu['kl_div']:.6f}"
+    )
+    print(
+        f"[{args.label}] YRI SFS — MAE={metrics_yri['mae']:.6f}  KL={metrics_yri['kl_div']:.6f}"
+    )
 
 
 if __name__ == "__main__":

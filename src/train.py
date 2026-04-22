@@ -1,10 +1,16 @@
 import torch
-from src.loss import recon_unmasked_loss, recon_masked_loss, kl_loss, phenotype_loss, domain_loss
-
+from src.loss import (
+    recon_unmasked_loss,
+    recon_masked_loss,
+    kl_loss,
+    phenotype_loss,
+    domain_loss,
+)
 
 # =============================================================================
 # GRL lambda schedule
 # =============================================================================
+
 
 def compute_grl_lambda(
     current_epoch: int,
@@ -19,6 +25,7 @@ def compute_grl_lambda(
     Starts near 0, ramps smoothly to lambda_max.
     """
     import math
+
     p = current_epoch / max(total_epochs, 1)
     return lambda_max * (2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0)
 
@@ -26,6 +33,7 @@ def compute_grl_lambda(
 # =============================================================================
 # Domain-accuracy helper (no grad, for adaptive weighting / logging)
 # =============================================================================
+
 
 @torch.no_grad()
 def domain_accuracy(domain_logits: torch.Tensor, pop_labels: torch.Tensor) -> float:
@@ -36,6 +44,7 @@ def domain_accuracy(domain_logits: torch.Tensor, pop_labels: torch.Tensor) -> fl
 # =============================================================================
 # Training
 # =============================================================================
+
 
 def train_one_epoch(
     model,
@@ -88,31 +97,31 @@ def train_one_epoch(
     """
     model.train()
 
-    total_loss           = 0.0
+    total_loss = 0.0
     total_recon_unmasked = 0.0
-    total_recon_masked   = 0.0
-    total_kl_loss        = 0.0
+    total_recon_masked = 0.0
+    total_kl_loss = 0.0
     total_phenotype_loss = 0.0
-    total_domain_loss    = 0.0
-    total_domain_acc     = 0.0
-    total_z_shared_var   = 0.0
-    has_z_pop            = model.shared_dim < model.latent_dim
-    total_z_pop_var      = 0.0 if has_z_pop else None
+    total_domain_loss = 0.0
+    total_domain_acc = 0.0
+    total_z_shared_var = 0.0
+    has_z_pop = model.shared_dim < model.latent_dim
+    total_z_pop_var = 0.0 if has_z_pop else None
 
     for x, pheno, pop_label in dataloader:
-        x         = x.to(device)
-        pheno     = pheno.to(device)
+        x = x.to(device)
+        pheno = pheno.to(device)
         pop_label = pop_label.to(device)
 
         if masker is not None:
             input_x, mask = masker.mask(x)
         else:
             input_x = x
-            mask    = torch.zeros(
+            mask = torch.zeros(
                 x.shape[0], x.shape[2], dtype=torch.bool, device=x.device
             )
         input_x = input_x.to(device)
-        mask    = mask.to(device)
+        mask = mask.to(device)
 
         optimizer.zero_grad()
 
@@ -127,9 +136,9 @@ def train_one_epoch(
 
         recon_unmasked = recon_unmasked_loss(out, targets, mask)
         recon_masked_l = recon_masked_loss(out, targets, mask)
-        kl             = kl_loss(mu, logvar)
+        kl = kl_loss(mu, logvar)
 
-        ceu_mask = (pop_label == 0)
+        ceu_mask = pop_label == 0
         if ceu_mask.any():
             pheno_l = phenotype_loss(pheno_pred[ceu_mask], pheno[ceu_mask])
         else:
@@ -150,7 +159,7 @@ def train_one_epoch(
         # ------------------------------------------------------------------
         if use_grl and domain_logits is not None:
             d_loss = domain_loss(domain_logits, pop_label)
-            d_acc  = domain_accuracy(domain_logits, pop_label)
+            d_acc = domain_accuracy(domain_logits, pop_label)
 
             # Adaptive scaling: penalise harder when the classifier is more
             # accurate (i.e. the latent space is still domain-separable).
@@ -158,31 +167,31 @@ def train_one_epoch(
             loss = loss + effective_delta * d_loss
 
             total_domain_loss += d_loss.item()
-            total_domain_acc  += d_acc
+            total_domain_acc += d_acc
         else:
             total_domain_loss += 0.0
-            total_domain_acc  += 0.0
+            total_domain_acc += 0.0
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        total_loss           += loss.item()
+        total_loss += loss.item()
         total_recon_unmasked += recon_u_val.item()
-        total_recon_masked   += recon_m_val.item()
-        total_kl_loss        += kl_val.item()
+        total_recon_masked += recon_m_val.item()
+        total_kl_loss += kl_val.item()
         total_phenotype_loss += pheno_val.item()
 
     n = len(dataloader)
     return (
-        total_loss           / n,
+        total_loss / n,
         total_recon_unmasked / n,
-        total_recon_masked   / n,
-        total_kl_loss        / n,
+        total_recon_masked / n,
+        total_kl_loss / n,
         total_phenotype_loss / n,
-        total_domain_loss    / n,
-        total_domain_acc     / n,
-        total_z_shared_var   / n,
+        total_domain_loss / n,
+        total_domain_acc / n,
+        total_z_shared_var / n,
         total_z_pop_var / n if has_z_pop else None,
     )
 
@@ -190,6 +199,7 @@ def train_one_epoch(
 # =============================================================================
 # Evaluation
 # =============================================================================
+
 
 @torch.no_grad()
 def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0):
@@ -201,17 +211,17 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
     """
     model.eval()
 
-    total_loss           = 0.0
+    total_loss = 0.0
     total_recon_unmasked = 0.0
-    total_recon_masked   = 0.0
-    total_kl_loss        = 0.0
+    total_recon_masked = 0.0
+    total_kl_loss = 0.0
     total_phenotype_loss = 0.0
 
     for input_x, x, pheno, mask, pop_label in dataloader:
-        input_x   = input_x.to(device)
-        x         = x.to(device)
-        pheno     = pheno.to(device)
-        mask      = mask.to(device)
+        input_x = input_x.to(device)
+        x = x.to(device)
+        pheno = pheno.to(device)
+        mask = mask.to(device)
         pop_label = pop_label.to(device)
 
         out, mu, logvar, z, pheno_pred, _domain_logits = model(input_x)
@@ -219,8 +229,8 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
 
         recon_unmasked = recon_unmasked_loss(out, targets, mask)
         recon_masked_l = recon_masked_loss(out, targets, mask)
-        kl             = kl_loss(mu, logvar)
-        pheno_l        = phenotype_loss(pheno_pred, pheno)
+        kl = kl_loss(mu, logvar)
+        pheno_l = phenotype_loss(pheno_pred, pheno)
 
         loss, recon_u_val, recon_m_val, kl_val, pheno_val = loss_fn(
             recon_unmasked=recon_unmasked,
@@ -232,18 +242,18 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
             gamma=gamma,
         )
 
-        total_loss           += loss.item()
+        total_loss += loss.item()
         total_recon_unmasked += recon_u_val.item()
-        total_recon_masked   += recon_m_val.item()
-        total_kl_loss        += kl_val.item()
+        total_recon_masked += recon_m_val.item()
+        total_kl_loss += kl_val.item()
         total_phenotype_loss += pheno_val.item()
 
     n = len(dataloader)
     return (
-        total_loss           / n,
+        total_loss / n,
         total_recon_unmasked / n,
-        total_recon_masked   / n,
-        total_kl_loss        / n,
+        total_recon_masked / n,
+        total_kl_loss / n,
         total_phenotype_loss / n,
     )
 
@@ -252,16 +262,17 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
 # Early stopping
 # =============================================================================
 
+
 class EarlyStopping:
     def __init__(self, patience=20, min_delta=1e-4):
-        self.patience       = patience
-        self.min_delta      = min_delta
-        self.best_loss      = float("inf")
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float("inf")
         self.num_bad_epochs = 0
 
     def step(self, val_loss):
         if val_loss < self.best_loss - self.min_delta:
-            self.best_loss      = val_loss
+            self.best_loss = val_loss
             self.num_bad_epochs = 0
             return True, False
         else:

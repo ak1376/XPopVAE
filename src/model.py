@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 
-
 # =============================================================================
 # Gradient Reversal
 # =============================================================================
+
 
 class GradientReversalFunction(Function):
     @staticmethod
@@ -36,6 +36,7 @@ class GradientReversalLayer(nn.Module):
 # =============================================================================
 # ConvVAE
 # =============================================================================
+
 
 class ConvVAE(nn.Module):
     """
@@ -105,9 +106,9 @@ class ConvVAE(nn.Module):
 
         # shared_dim defaults to half the latent space
         self.shared_dim = shared_dim if shared_dim is not None else latent_dim // 2
-        assert self.shared_dim <= latent_dim, (
-            f"shared_dim ({self.shared_dim}) must be <= latent_dim ({latent_dim})"
-        )
+        assert (
+            self.shared_dim <= latent_dim
+        ), f"shared_dim ({self.shared_dim}) must be <= latent_dim ({latent_dim})"
 
         # ------------------------------------------------------------------
         # Encoder
@@ -141,7 +142,7 @@ class ConvVAE(nn.Module):
         self.final_length = current_length
         self.flat_dim = self.final_channels * self.final_length
 
-        self.fc_mu     = nn.Linear(self.flat_dim, latent_dim)
+        self.fc_mu = nn.Linear(self.flat_dim, latent_dim)
         self.fc_logvar = nn.Linear(self.flat_dim, latent_dim)
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
@@ -179,15 +180,15 @@ class ConvVAE(nn.Module):
         # ------------------------------------------------------------------
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
-        target_lengths   = list(reversed(self.encoder_lengths[:-1]))
-        current_in       = decoder_channels[0]
-        current_length   = self.encoder_lengths[-1]
+        target_lengths = list(reversed(self.encoder_lengths[:-1]))
+        current_in = decoder_channels[0]
+        current_length = self.encoder_lengths[-1]
 
         for i, target_length in enumerate(target_lengths):
-            is_last     = i == len(target_lengths) - 1
+            is_last = i == len(target_lengths) - 1
             current_out = decoder_channels[i + 1] if not is_last else num_classes
 
-            base_length    = (current_length - 1) * stride - 2 * padding + kernel_size
+            base_length = (current_length - 1) * stride - 2 * padding + kernel_size
             output_padding = target_length - base_length
 
             if output_padding not in [0, 1]:
@@ -211,7 +212,7 @@ class ConvVAE(nn.Module):
                     dec_layers.append(nn.BatchNorm1d(current_out))
                 dec_layers.append(self._get_activation())
 
-            current_in     = current_out
+            current_in = current_out
             current_length = target_length
 
         self.decoder = nn.Sequential(*dec_layers)
@@ -232,7 +233,9 @@ class ConvVAE(nn.Module):
         return ((length + 2 * padding - kernel_size) // stride) + 1
 
     @staticmethod
-    def compute_transpose_output_length(length, kernel_size, stride, padding, output_padding):
+    def compute_transpose_output_length(
+        length, kernel_size, stride, padding, output_padding
+    ):
         return (length - 1) * stride - 2 * padding + kernel_size + output_padding
 
     def reparameterize(self, mu, logvar):
@@ -255,12 +258,12 @@ class ConvVAE(nn.Module):
             log('z_shared_var', stats['z_shared_var'])
             log('z_pop_var',    stats['z_pop_var'])
         """
-        z_shared = mu[:, :self.shared_dim]
-        z_pop    = mu[:, self.shared_dim:]
+        z_shared = mu[:, : self.shared_dim]
+        z_pop = mu[:, self.shared_dim :]
         z_pop_var = z_pop.var(dim=0).mean().item() if z_pop.shape[1] > 0 else None
         return {
             "z_shared_var": z_shared.var(dim=0).mean().item(),
-            "z_pop_var":    z_pop_var,
+            "z_pop_var": z_pop_var,
         }
 
     # ------------------------------------------------------------------
@@ -291,15 +294,15 @@ class ConvVAE(nn.Module):
         if verbose:
             print(f"Flattened: {h_flat.shape}")
 
-        mu     = self.fc_mu(h_flat)
+        mu = self.fc_mu(h_flat)
         logvar = self.fc_logvar(h_flat)
         logvar = torch.clamp(logvar, min=-6.0, max=6.0)
-        z      = self.reparameterize(mu, logvar)
+        z = self.reparameterize(mu, logvar)
 
         # ── Split mu into the two subspaces ───────────────────────────────
         # z_shared: domain-invariant, used for phenotype + GRL
         # z_pop:    population-specific, only used implicitly via full z in decoder
-        z_shared = mu[:, :self.shared_dim]   # (B, shared_dim)
+        z_shared = mu[:, : self.shared_dim]  # (B, shared_dim)
         # z_pop  = mu[:, self.shared_dim:]   # (B, latent_dim - shared_dim)
         #   not needed explicitly here — decoder uses full z
 
@@ -308,7 +311,7 @@ class ConvVAE(nn.Module):
 
         # Domain classification through reversed gradients on z_shared only
         if self.use_grl:
-            z_shared_rev  = self.grl(z_shared)
+            z_shared_rev = self.grl(z_shared)
             domain_logits = self.domain_classifier(z_shared_rev)
         else:
             domain_logits = None
@@ -316,11 +319,13 @@ class ConvVAE(nn.Module):
         # Decoder — full z, unchanged
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
-        out   = h_dec
+        out = h_dec
         for i, layer in enumerate(self.decoder):
             out = layer(out)
             if verbose:
-                print(f"Decoder layer {i:02d} ({layer.__class__.__name__}): {out.shape}")
+                print(
+                    f"Decoder layer {i:02d} ({layer.__class__.__name__}): {out.shape}"
+                )
 
         expected_shape = (x.size(0), self.num_classes, x.size(2))
         if out.shape != expected_shape:

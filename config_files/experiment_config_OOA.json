@@ -11,22 +11,44 @@
   "discovery_train_frac": 0.8,
   "target_held_out_frac": 0.8,
   "seed": 42,
-  "num_draws": 1,
-  "num_replicates": 1,
-"priors": {
-    "N_anc":         [7310,    7310],
-    "N_YRI_anc":     [14474,   14474],
-    "N_CEU_founder": [1861,    1861],
-    "N_CEU_early":   [1032,    1032],
-    "r_YRI":         [0.0166,  0.0166],
-    "r_CEU_early":   [0.00307, 0.00307],
-    "r_CEU":         [0.0195,  0.0195],
-    "T_AF":          [5920,    5920],
-    "T_OOA":         [5000,    5000],
-    "T_CEU_expand":  [920,     920],
-    "T_growth":      [204.6,   204.6],
-    "m_founder":     [1.5e-4,  1.5e-4],
-    "m_modern":      [2.5e-5,  2.5e-5]
+  "num_draws": 20,
+  "num_replicates": 10,
+  "priors": {
+      "N_anc":         [7310,    7310],
+      "N_YRI_anc":     [14474,   14474],
+      "N_CEU_founder": [1861,    1861],
+      "N_CEU_early":   [1032,    1032],
+      "r_YRI":         [0.0166,  0.0166],
+      "r_CEU_early":   [0.00307, 0.00307],
+      "r_CEU":         [0.0195,  0.0195],
+      "T_AF":          [5920,    5920],
+      "T_OOA":         [5000,    5000],
+      "T_CEU_expand":  [920,     920],
+      "T_growth":      [204.6,   204.6],
+      "m_founder":     [1.5e-4,  1.5e-4],
+      "m_modern":      [2.5e-5,  2.5e-5]
+    },
+
+    "grid_sampling": {
+    "enabled": true,
+    "varying_param": "T_OOA",
+    "min_value": 1000,
+    "max_value": 5000,
+    "scale": "linear",
+    "fixed_params": {
+      "N_anc":         7310,
+      "N_YRI_anc":     14474,
+      "N_CEU_founder": 1861,
+      "N_CEU_early":   1032,
+      "r_YRI":         0.0166,
+      "r_CEU_early":   0.00307,
+      "r_CEU":         0.0195,
+      "T_AF":          5920,
+      "T_CEU_expand":  920,
+      "T_growth":      204.6,
+      "m_founder":     1.5e-4,
+      "m_modern":      2.5e-5
+    }
   },
   "parameter_order": [
     "N_anc", "N_YRI_anc", "N_CEU_founder", "N_CEU_early",
@@ -35,7 +57,7 @@
     "m_founder", "m_modern"
   ],
   "num_causal_variants": 200,
-  "heritability": 0.7,
+  "heritability": 1.0,
   "trait_distribution": "normal",
   "trait_distribution_parameters": {
     "mean": 0,

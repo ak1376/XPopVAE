@@ -6,7 +6,7 @@ def recon_unmasked_loss(logits, targets, mask):
     if mask.all():
         return torch.tensor(0.0, device=logits.device, requires_grad=True)
     logits = logits.permute(0, 2, 1)
-    unmasked_logits  = logits[~mask]
+    unmasked_logits = logits[~mask]
     unmasked_targets = targets[~mask]
     return F.cross_entropy(unmasked_logits, unmasked_targets, reduction="mean")
 
@@ -15,7 +15,7 @@ def recon_masked_loss(logits, targets, mask):
     if not mask.any():
         return torch.tensor(0.0, device=logits.device, requires_grad=True)
     logits = logits.permute(0, 2, 1)
-    masked_logits  = logits[mask]
+    masked_logits = logits[mask]
     masked_targets = targets[mask]
     return F.cross_entropy(masked_logits, masked_targets, reduction="mean")
 
@@ -72,7 +72,7 @@ def vae_loss(
     loss = (
         alpha * recon_masked
         + (1 - alpha) * recon_unmasked
-        + beta  * kl
+        + beta * kl
         + gamma * pheno_loss
     )
     return loss, recon_unmasked, recon_masked, kl, pheno_loss

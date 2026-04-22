@@ -54,12 +54,13 @@ from src.utils import (
     save_checkpoint,
     make_eval_loader,
     run_eval_plots,
-    extract_latent_with_pheno
+    extract_latent_with_pheno,
 )
 
 # =============================================================================
 # Main
 # =============================================================================
+
 
 def main(
     vae_config_path: Path,
@@ -77,9 +78,9 @@ def main(
     # ------------------------------------------------------------------
     # output directories
     # ------------------------------------------------------------------
-    out            = output_dir / "vae_outputs"
+    out = output_dir / "vae_outputs"
     checkpoint_dir = out / "checkpoints"
-    plots_dir      = out / "plots"
+    plots_dir = out / "plots"
     for d in (out, checkpoint_dir, plots_dir):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -88,64 +89,73 @@ def main(
     # ------------------------------------------------------------------
     # hyperparameters — model
     # ------------------------------------------------------------------
-    in_channels      = 1
-    hidden_channels  = vae_config["model"]["hidden_channels"]
-    kernel_size      = int(vae_config["model"]["kernel_size"])
-    stride           = int(vae_config["model"]["stride"])
-    padding          = int(vae_config["model"]["padding"])
-    latent_dim       = int(vae_config["model"]["latent_dim"])
-    shared_dim       = vae_config["model"].get("shared_dim", None)  # defaults to latent_dim // 2
+    in_channels = 1
+    hidden_channels = vae_config["model"]["hidden_channels"]
+    kernel_size = int(vae_config["model"]["kernel_size"])
+    stride = int(vae_config["model"]["stride"])
+    padding = int(vae_config["model"]["padding"])
+    latent_dim = int(vae_config["model"]["latent_dim"])
+    shared_dim = vae_config["model"].get(
+        "shared_dim", None
+    )  # defaults to latent_dim // 2
 
     # ------------------------------------------------------------------
     # hyperparameters — training
     # ------------------------------------------------------------------
-    beta             = float(vae_config["training"]["beta"])
-    learning_rate    = float(vae_config["training"]["lr"])
-    batch_size       = int(vae_config["training"]["batch_size"])
-    num_epochs       = int(vae_config["training"]["max_epochs"])
-    patience         = int(vae_config["training"].get("patience", 500))
-    min_delta        = float(vae_config["training"].get("min_delta", 1e-4))
+    beta = float(vae_config["training"]["beta"])
+    learning_rate = float(vae_config["training"]["lr"])
+    batch_size = int(vae_config["training"]["batch_size"])
+    num_epochs = int(vae_config["training"]["max_epochs"])
+    patience = int(vae_config["training"].get("patience", 500))
+    min_delta = float(vae_config["training"].get("min_delta", 1e-4))
 
     # ------------------------------------------------------------------
     # hyperparameters — masking
     # ------------------------------------------------------------------
-    masking      = vae_config["masking"].get("enabled", False)
-    alpha        = float(vae_config["masking"]["alpha_masked"])
+    masking = vae_config["masking"].get("enabled", False)
+    alpha = float(vae_config["masking"]["alpha_masked"])
     block_length = int(vae_config["masking"]["block_len"])
-    mask_frac    = float(vae_config["masking"]["mask_frac"])
+    mask_frac = float(vae_config["masking"]["mask_frac"])
 
     # ------------------------------------------------------------------
     # hyperparameters — phenotype head
     # ------------------------------------------------------------------
-    pheno_hidden_dim   = vae_config["phenotype"].get("pheno_hidden_dim", None)
-    gamma              = float(vae_config["phenotype"].get("gamma", 1.0))
+    pheno_hidden_dim = vae_config["phenotype"].get("pheno_hidden_dim", None)
+    gamma = float(vae_config["phenotype"].get("gamma", 1.0))
     pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
 
     # ------------------------------------------------------------------
     # hyperparameters — domain adaptation (GRL)
     # ------------------------------------------------------------------
-    da_cfg         = vae_config.get("domain_adaptation", {})
-    use_grl        = bool(da_cfg.get("use_grl", False))
-    raw            = da_cfg.get("grl_hidden_dim", None)
+    da_cfg = vae_config.get("domain_adaptation", {})
+    use_grl = bool(da_cfg.get("use_grl", False))
+    raw = da_cfg.get("grl_hidden_dim", None)
     grl_hidden_dim = int(raw) if raw is not None else None
     grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
-    delta          = float(da_cfg.get("delta", 1.0))
+    delta = float(da_cfg.get("delta", 1.0))
 
     print(f"Masking enabled: {masking}")
-    print(f"GRL enabled: {use_grl}"
-          + (f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
-             if use_grl else ""))
-    print(f"Latent dim: {latent_dim}  shared_dim: {shared_dim if shared_dim is not None else latent_dim // 2} (default)")
+    print(
+        f"GRL enabled: {use_grl}"
+        + (
+            f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
+            if use_grl
+            else ""
+        )
+    )
+    print(
+        f"Latent dim: {latent_dim}  shared_dim: {shared_dim if shared_dim is not None else latent_dim // 2} (default)"
+    )
 
     # ------------------------------------------------------------------
     # load genotypes
     # ------------------------------------------------------------------
-    training_dataset     = np.load(training_data_path)
-    disc_train_dataset   = np.load(disc_train_data_path)
+    training_dataset = np.load(training_data_path)
+    disc_train_dataset = np.load(disc_train_data_path)
     target_train_dataset = np.load(target_train_data_path)
-    validation_dataset   = np.load(validation_data_path)
+    validation_dataset = np.load(validation_data_path)
 
-    n_disc_train   = disc_train_dataset.shape[0]
+    n_disc_train = disc_train_dataset.shape[0]
     n_target_train = target_train_dataset.shape[0]
     assert n_disc_train + n_target_train == training_dataset.shape[0], (
         f"training.npy rows ({training_dataset.shape[0]}) != "
@@ -157,17 +167,19 @@ def main(
     # ------------------------------------------------------------------
     # load + normalise phenotypes
     # ------------------------------------------------------------------
-    disc_train_pheno   = np.load(disc_train_pheno_path).astype(np.float32)
+    disc_train_pheno = np.load(disc_train_pheno_path).astype(np.float32)
     target_train_pheno = np.load(target_train_pheno_path).astype(np.float32)
-    validation_pheno   = np.load(validation_pheno_path).astype(np.float32)
+    validation_pheno = np.load(validation_pheno_path).astype(np.float32)
 
     train_mean = disc_train_pheno.mean()
-    train_std  = disc_train_pheno.std()
-    print(f"Phenotype normalisation — mean={train_mean:.4f}  std={train_std:.4f}  (CEU disc_train only)")
+    train_std = disc_train_pheno.std()
+    print(
+        f"Phenotype normalisation — mean={train_mean:.4f}  std={train_std:.4f}  (CEU disc_train only)"
+    )
 
-    disc_train_pheno_norm   = (disc_train_pheno   - train_mean) / train_std
+    disc_train_pheno_norm = (disc_train_pheno - train_mean) / train_std
     target_train_pheno_norm = (target_train_pheno - train_mean) / train_std
-    validation_pheno_norm   = (validation_pheno   - train_mean) / train_std
+    validation_pheno_norm = (validation_pheno - train_mean) / train_std
 
     training_pheno_norm = np.concatenate(
         [disc_train_pheno_norm, np.zeros(n_target_train, dtype=np.float32)], axis=0
@@ -176,19 +188,25 @@ def main(
     # ------------------------------------------------------------------
     # masker
     # ------------------------------------------------------------------
-    masker = Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
+    masker = (
+        Masker(block_length=block_length, mask_fraction=mask_frac) if masking else None
+    )
 
     # ------------------------------------------------------------------
     # training loader
     # ------------------------------------------------------------------
-    training_geno_t  = torch.tensor(training_dataset,    dtype=torch.float32).unsqueeze(1)
-    training_pheno_t = torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(1)
-    training_pop_t   = torch.cat([
-        torch.zeros(n_disc_train,  dtype=torch.long),
-        torch.ones(n_target_train, dtype=torch.long),
-    ])
+    training_geno_t = torch.tensor(training_dataset, dtype=torch.float32).unsqueeze(1)
+    training_pheno_t = torch.tensor(training_pheno_norm, dtype=torch.float32).unsqueeze(
+        1
+    )
+    training_pop_t = torch.cat(
+        [
+            torch.zeros(n_disc_train, dtype=torch.long),
+            torch.ones(n_target_train, dtype=torch.long),
+        ]
+    )
 
-    train_ds     = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
+    train_ds = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     # ------------------------------------------------------------------
@@ -199,35 +217,49 @@ def main(
         pheno_norm=disc_train_pheno_norm,
         pop_label_value=0,
         batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="discovery_train",
+        masker=masker,
+        masking=masking,
+        out_dir=out,
+        split_name="discovery_train",
     )
 
-    target_train_loader = make_eval_loader(
-        geno=target_train_dataset,
-        pheno_norm=target_train_pheno_norm,
-        pop_label_value=1,
-        batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="target_train",
-    ) if n_target_train > 0 else None
+    target_train_loader = (
+        make_eval_loader(
+            geno=target_train_dataset,
+            pheno_norm=target_train_pheno_norm,
+            pop_label_value=1,
+            batch_size=batch_size,
+            masker=masker,
+            masking=masking,
+            out_dir=out,
+            split_name="target_train",
+        )
+        if n_target_train > 0
+        else None
+    )
 
     val_loader = make_eval_loader(
         geno=validation_dataset,
         pheno_norm=validation_pheno_norm,
         pop_label_value=0,
         batch_size=batch_size,
-        masker=masker, masking=masking,
-        out_dir=out, split_name="discovery_validation",
+        masker=masker,
+        masking=masking,
+        out_dir=out,
+        split_name="discovery_validation",
     )
 
     # target_held_out: always build if file exists
-    held_out_geno_path  = target_train_data_path.parent / "target_held_out.npy"
-    held_out_pheno_path = target_train_data_path.parent.parent / "phenotypes" / "target_held_out_pheno.npy"
+    held_out_geno_path = target_train_data_path.parent / "target_held_out.npy"
+    held_out_pheno_path = (
+        target_train_data_path.parent.parent
+        / "phenotypes"
+        / "target_held_out_pheno.npy"
+    )
 
     target_held_out_loader = None
     if held_out_geno_path.exists() and held_out_pheno_path.exists():
-        held_out_geno  = np.load(held_out_geno_path)
+        held_out_geno = np.load(held_out_geno_path)
         held_out_pheno = np.load(held_out_pheno_path).astype(np.float32)
         held_out_pheno_norm = (held_out_pheno - train_mean) / train_std
         if len(held_out_geno) > 0:
@@ -236,8 +268,10 @@ def main(
                 pheno_norm=held_out_pheno_norm,
                 pop_label_value=1,
                 batch_size=batch_size,
-                masker=masker, masking=masking,
-                out_dir=out, split_name="target_held_out",
+                masker=masker,
+                masking=masking,
+                out_dir=out,
+                split_name="target_held_out",
             )
             print(f"target_held_out loader built: {held_out_geno.shape}")
     else:
@@ -246,9 +280,9 @@ def main(
     # ------------------------------------------------------------------
     # diagnostic heatmap
     # ------------------------------------------------------------------
-    val_geno_t  = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
+    val_geno_t = torch.tensor(validation_dataset, dtype=torch.float32).unsqueeze(1)
     val_input_x = next(iter(val_loader))[0]
-    val_mask    = next(iter(val_loader))[3]
+    val_mask = next(iter(val_loader))[3]
 
     plot_example_input_heatmap(
         original_x=val_geno_t,
@@ -285,7 +319,9 @@ def main(
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Latent split: z_shared={model.shared_dim}  z_pop={latent_dim - model.shared_dim}")
+    print(
+        f"Latent split: z_shared={model.shared_dim}  z_pop={latent_dim - model.shared_dim}"
+    )
 
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
@@ -297,32 +333,35 @@ def main(
     # optimizer
     # ------------------------------------------------------------------
     pheno_head_params = set(model.pheno_head.parameters())
-    other_params      = [p for p in model.parameters() if p not in pheno_head_params]
-    optimizer = torch.optim.Adam([
-        {"params": other_params,            "weight_decay": 0.0},
-        {"params": list(pheno_head_params), "weight_decay": pheno_weight_decay},
-    ], lr=learning_rate)
+    other_params = [p for p in model.parameters() if p not in pheno_head_params]
+    optimizer = torch.optim.Adam(
+        [
+            {"params": other_params, "weight_decay": 0.0},
+            {"params": list(pheno_head_params), "weight_decay": pheno_weight_decay},
+        ],
+        lr=learning_rate,
+    )
 
     # ------------------------------------------------------------------
     # training-history accumulators
     # ------------------------------------------------------------------
     train_loss_list, train_recon_unmasked_list = [], []
-    train_recon_masked_list, train_kl_list     = [], []
-    train_phenotype_loss_list                  = []
-    train_domain_loss_list                     = []
-    train_domain_acc_list                      = []
-    train_z_shared_var_list                    = []
-    train_z_pop_var_list                       = []
+    train_recon_masked_list, train_kl_list = [], []
+    train_phenotype_loss_list = []
+    train_domain_loss_list = []
+    train_domain_acc_list = []
+    train_z_shared_var_list = []
+    train_z_pop_var_list = []
 
-    val_loss_list, val_recon_unmasked_list     = [], []
-    val_recon_masked_list, val_kl_list         = [], []
-    val_phenotype_loss_list                    = []
+    val_loss_list, val_recon_unmasked_list = [], []
+    val_recon_masked_list, val_kl_list = [], []
+    val_phenotype_loss_list = []
 
-    best_val_stop_metric       = float("inf")
-    best_model_path            = checkpoint_dir / "best_model.pt"
-    final_model_path           = checkpoint_dir / "final_model.pt"
+    best_val_stop_metric = float("inf")
+    best_model_path = checkpoint_dir / "best_model.pt"
+    final_model_path = checkpoint_dir / "final_model.pt"
     epochs_without_improvement = 0
-    best_epoch                 = 0
+    best_epoch = 0
 
     # ------------------------------------------------------------------
     # training loop
@@ -335,9 +374,17 @@ def main(
         else:
             grl_lam = 0.0
 
-        (train_loss, train_recon_unmasked, train_recon_masked,
-         train_kl, train_pheno, train_domain, train_d_acc,
-         train_z_shared_var, train_z_pop_var) = train_one_epoch(
+        (
+            train_loss,
+            train_recon_unmasked,
+            train_recon_masked,
+            train_kl,
+            train_pheno,
+            train_domain,
+            train_d_acc,
+            train_z_shared_var,
+            train_z_pop_var,
+        ) = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -364,7 +411,7 @@ def main(
         val_stop_metric = (
             val_recon_unmasked
             + alpha * val_recon_masked
-            + beta  * val_kl
+            + beta * val_kl
             + gamma * val_pheno
         )
 
@@ -385,9 +432,13 @@ def main(
         val_phenotype_loss_list.append(val_pheno)
 
         grl_str = (
-            f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
-            f"  domain_acc={train_d_acc:.3f}"
-        ) if use_grl else ""
+            (
+                f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
+                f"  domain_acc={train_d_acc:.3f}"
+            )
+            if use_grl
+            else ""
+        )
 
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
@@ -396,12 +447,16 @@ def main(
             f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
             + grl_str
             + f" | z_shared_var={train_z_shared_var:.4f}"
-            + (f"  z_pop_var={train_z_pop_var:.4f}" if train_z_pop_var is not None else "")
+            + (
+                f"  z_pop_var={train_z_pop_var:.4f}"
+                if train_z_pop_var is not None
+                else ""
+            )
         )
 
         if val_stop_metric < (best_val_stop_metric - min_delta):
-            best_val_stop_metric       = val_stop_metric
-            best_epoch                 = epoch + 1
+            best_val_stop_metric = val_stop_metric
+            best_epoch = epoch + 1
             epochs_without_improvement = 0
             save_checkpoint(
                 path=best_model_path,
@@ -438,22 +493,26 @@ def main(
     # save training history
     # ------------------------------------------------------------------
     history_dict = dict(
-        train_losses                 = np.array(train_loss_list),
-        val_losses                   = np.array(val_loss_list),
-        train_recon_unmasked_losses  = np.array(train_recon_unmasked_list),
-        val_recon_unmasked_losses    = np.array(val_recon_unmasked_list),
-        train_kl_losses              = np.array(train_kl_list),
-        val_kl_losses                = np.array(val_kl_list),
-        train_phenotype_losses       = np.array(train_phenotype_loss_list),
-        val_phenotype_losses         = np.array(val_phenotype_loss_list),
-        train_recon_masked_losses    = np.array(train_recon_masked_list),
-        val_recon_masked_losses      = np.array(val_recon_masked_list),
-        train_z_shared_var           = np.array(train_z_shared_var_list),
-        **({"train_z_pop_var": np.array(train_z_pop_var_list)} if train_z_pop_var_list[0] is not None else {}),
+        train_losses=np.array(train_loss_list),
+        val_losses=np.array(val_loss_list),
+        train_recon_unmasked_losses=np.array(train_recon_unmasked_list),
+        val_recon_unmasked_losses=np.array(val_recon_unmasked_list),
+        train_kl_losses=np.array(train_kl_list),
+        val_kl_losses=np.array(val_kl_list),
+        train_phenotype_losses=np.array(train_phenotype_loss_list),
+        val_phenotype_losses=np.array(val_phenotype_loss_list),
+        train_recon_masked_losses=np.array(train_recon_masked_list),
+        val_recon_masked_losses=np.array(val_recon_masked_list),
+        train_z_shared_var=np.array(train_z_shared_var_list),
+        **(
+            {"train_z_pop_var": np.array(train_z_pop_var_list)}
+            if train_z_pop_var_list[0] is not None
+            else {}
+        ),
     )
     if use_grl:
         history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
-        history_dict["train_domain_acc"]    = np.array(train_domain_acc_list)
+        history_dict["train_domain_acc"] = np.array(train_domain_acc_list)
 
     np.savez(out / "training_history.npz", **history_dict)
 
@@ -467,11 +526,13 @@ def main(
         train_pheno_losses=train_phenotype_loss_list,
         val_pheno_losses=val_phenotype_loss_list,
         train_recon_masked_losses=train_recon_masked_list if masking else None,
-        val_recon_masked_losses=val_recon_masked_list     if masking else None,
+        val_recon_masked_losses=val_recon_masked_list if masking else None,
         train_domain_losses=train_domain_loss_list if use_grl else None,
-        train_domain_accs=train_domain_acc_list    if use_grl else None,
+        train_domain_accs=train_domain_acc_list if use_grl else None,
         train_z_shared_vars=train_z_shared_var_list,
-        train_z_pop_vars=train_z_pop_var_list if train_z_pop_var_list[0] is not None else None,
+        train_z_pop_vars=(
+            train_z_pop_var_list if train_z_pop_var_list[0] is not None else None
+        ),
         output_dir=out,
     )
 
@@ -491,39 +552,64 @@ def main(
     # per-split evaluation plots
     # ------------------------------------------------------------------
     run_eval_plots(
-        model=model, loader=disc_train_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_train",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
+        model=model,
+        loader=disc_train_loader,
+        device=device,
+        out_dir=plots_dir,
+        split_name="discovery_train",
+        use_masked=use_masked,
+        loss_fn=vae_loss,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
     )
 
     if target_train_loader is not None:
         run_eval_plots(
-            model=model, loader=target_train_loader, device=device,
-            out_dir=plots_dir, split_name="target_train",
-            use_masked=use_masked, loss_fn=vae_loss,
-            alpha=alpha, beta=beta, gamma=gamma,
+            model=model,
+            loader=target_train_loader,
+            device=device,
+            out_dir=plots_dir,
+            split_name="target_train",
+            use_masked=use_masked,
+            loss_fn=vae_loss,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
         )
 
     if target_held_out_loader is not None:
         run_eval_plots(
-            model=model, loader=target_held_out_loader, device=device,
-            out_dir=plots_dir, split_name="target_held_out",
-            use_masked=use_masked, loss_fn=vae_loss,
-            alpha=alpha, beta=beta, gamma=gamma,
+            model=model,
+            loader=target_held_out_loader,
+            device=device,
+            out_dir=plots_dir,
+            split_name="target_held_out",
+            use_masked=use_masked,
+            loss_fn=vae_loss,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
         )
 
     run_eval_plots(
-        model=model, loader=val_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_validation",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
+        model=model,
+        loader=val_loader,
+        device=device,
+        out_dir=plots_dir,
+        split_name="discovery_validation",
+        use_masked=use_masked,
+        loss_fn=vae_loss,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
     )
 
     # ------------------------------------------------------------------
     # fit shared PCA basis on disc_train — used for ALL latent plots
     # ------------------------------------------------------------------
     from src.plotting import fit_latent_pca
+
     disc_train_latent, _, _, _ = extract_latent_with_pheno(
         model, disc_train_loader, device, use_masked_input=use_masked
     )
@@ -533,37 +619,65 @@ def main(
     # per-split evaluation plots — all in shared PCA coordinate system
     # ------------------------------------------------------------------
     run_eval_plots(
-        model=model, loader=disc_train_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_train",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-        shared_scaler=shared_scaler, shared_pca=shared_pca,
+        model=model,
+        loader=disc_train_loader,
+        device=device,
+        out_dir=plots_dir,
+        split_name="discovery_train",
+        use_masked=use_masked,
+        loss_fn=vae_loss,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        shared_scaler=shared_scaler,
+        shared_pca=shared_pca,
     )
 
     if target_train_loader is not None:
         run_eval_plots(
-            model=model, loader=target_train_loader, device=device,
-            out_dir=plots_dir, split_name="target_train",
-            use_masked=use_masked, loss_fn=vae_loss,
-            alpha=alpha, beta=beta, gamma=gamma,
-            shared_scaler=shared_scaler, shared_pca=shared_pca,
+            model=model,
+            loader=target_train_loader,
+            device=device,
+            out_dir=plots_dir,
+            split_name="target_train",
+            use_masked=use_masked,
+            loss_fn=vae_loss,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            shared_scaler=shared_scaler,
+            shared_pca=shared_pca,
         )
 
     if target_held_out_loader is not None:
         run_eval_plots(
-            model=model, loader=target_held_out_loader, device=device,
-            out_dir=plots_dir, split_name="target_held_out",
-            use_masked=use_masked, loss_fn=vae_loss,
-            alpha=alpha, beta=beta, gamma=gamma,
-            shared_scaler=shared_scaler, shared_pca=shared_pca,
+            model=model,
+            loader=target_held_out_loader,
+            device=device,
+            out_dir=plots_dir,
+            split_name="target_held_out",
+            use_masked=use_masked,
+            loss_fn=vae_loss,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            shared_scaler=shared_scaler,
+            shared_pca=shared_pca,
         )
 
     run_eval_plots(
-        model=model, loader=val_loader, device=device,
-        out_dir=plots_dir, split_name="discovery_validation",
-        use_masked=use_masked, loss_fn=vae_loss,
-        alpha=alpha, beta=beta, gamma=gamma,
-        shared_scaler=shared_scaler, shared_pca=shared_pca,
+        model=model,
+        loader=val_loader,
+        device=device,
+        out_dir=plots_dir,
+        split_name="discovery_validation",
+        use_masked=use_masked,
+        loss_fn=vae_loss,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        shared_scaler=shared_scaler,
+        shared_pca=shared_pca,
     )
 
     # ------------------------------------------------------------------
@@ -631,19 +745,20 @@ def main(
 # CLI
 # =============================================================================
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Train ConvVAE on mixed CEU+YRI genotypes; evaluate per population."
     )
-    p.add_argument("--vae-config",           type=Path, required=True)
-    p.add_argument("--training-data",        type=Path, required=True)
-    p.add_argument("--disc-train-data",      type=Path, required=True)
-    p.add_argument("--target-train-data",    type=Path, required=True)
-    p.add_argument("--validation-data",      type=Path, required=True)
-    p.add_argument("--disc-train-pheno",     type=Path, required=True)
-    p.add_argument("--target-train-pheno",   type=Path, required=True)
-    p.add_argument("--validation-pheno",     type=Path, required=True)
-    p.add_argument("--outputs",              type=Path, required=True)
+    p.add_argument("--vae-config", type=Path, required=True)
+    p.add_argument("--training-data", type=Path, required=True)
+    p.add_argument("--disc-train-data", type=Path, required=True)
+    p.add_argument("--target-train-data", type=Path, required=True)
+    p.add_argument("--validation-data", type=Path, required=True)
+    p.add_argument("--disc-train-pheno", type=Path, required=True)
+    p.add_argument("--target-train-pheno", type=Path, required=True)
+    p.add_argument("--validation-pheno", type=Path, required=True)
+    p.add_argument("--outputs", type=Path, required=True)
     return p
 
 

@@ -3,23 +3,34 @@ import demes
 import math
 
 
-def IM_symmetric_model(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
+def IM_symmetric_model(
+    sampled: Dict[str, float], cfg: Optional[Dict] = None
+) -> demes.Graph:
     """
     Split + symmetric migration (YRI/CEU).
     YRI is constant size throughout (ancestral + modern).
     CEU has a bottleneck: small founding size N_CEU_bottleneck expanding to N_CEU.
     """
 
-    required_keys = ["N_YRI", "N_CEU", "N_CEU_bottleneck", "m", "T_split", "T_bottleneck"]
+    required_keys = [
+        "N_YRI",
+        "N_CEU",
+        "N_CEU_bottleneck",
+        "m",
+        "T_split",
+        "T_bottleneck",
+    ]
     for k in required_keys:
         assert k in sampled, f"Missing required key: {k}"
 
-    N_YRI         = float(sampled["N_YRI"])
-    N_CEU         = float(sampled["N_CEU"])
-    N_CEU_bot     = float(sampled["N_CEU_bottleneck"])
-    T_split       = float(sampled["T_split"])
-    T_bot         = float(sampled["T_bottleneck"])  # generations after split, so T_split > T_bot > 0
-    m             = float(sampled["m"])
+    N_YRI = float(sampled["N_YRI"])
+    N_CEU = float(sampled["N_CEU"])
+    N_CEU_bot = float(sampled["N_CEU_bottleneck"])
+    T_split = float(sampled["T_split"])
+    T_bot = float(
+        sampled["T_bottleneck"]
+    )  # generations after split, so T_split > T_bot > 0
+    m = float(sampled["m"])
 
     assert T_split > T_bot > 0, "Need T_split > T_bottleneck > 0"
 
@@ -37,16 +48,21 @@ def IM_symmetric_model(sampled: Dict[str, float], cfg: Optional[Dict] = None) ->
         ancestors=["YRI"],
         start_time=T_split,
         epochs=[
-            dict(start_size=N_CEU_bot, end_time=T_bot),   # bottleneck epoch
-            dict(start_size=N_CEU,     end_time=0),        # post-bottleneck expansion
+            dict(start_size=N_CEU_bot, end_time=T_bot),  # bottleneck epoch
+            dict(start_size=N_CEU, end_time=0),  # post-bottleneck expansion
         ],
     )
 
     if m > 0:
-        b.add_migration(source="YRI", dest="CEU", rate=m, start_time=T_split, end_time=0)
-        b.add_migration(source="CEU", dest="YRI", rate=m, start_time=T_split, end_time=0)
+        b.add_migration(
+            source="YRI", dest="CEU", rate=m, start_time=T_split, end_time=0
+        )
+        b.add_migration(
+            source="CEU", dest="YRI", rate=m, start_time=T_split, end_time=0
+        )
 
     return b.resolve()
+
 
 def OOA(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
     """
@@ -57,30 +73,40 @@ def OOA(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
     """
 
     required_keys = [
-        "N_anc", "N_YRI_anc", "N_CEU_founder", "N_CEU_early",
-        "r_YRI", "r_CEU_early", "r_CEU",
-        "T_AF", "T_OOA", "T_CEU_expand", "T_growth",
-        "m_founder", "m_modern",
+        "N_anc",
+        "N_YRI_anc",
+        "N_CEU_founder",
+        "N_CEU_early",
+        "r_YRI",
+        "r_CEU_early",
+        "r_CEU",
+        "T_AF",
+        "T_OOA",
+        "T_CEU_expand",
+        "T_growth",
+        "m_founder",
+        "m_modern",
     ]
     for k in required_keys:
         assert k in sampled, f"Missing required key: {k}"
 
-    N_anc        = float(sampled["N_anc"])
-    N_YRI_anc    = float(sampled["N_YRI_anc"])
-    N_CEU_founder= float(sampled["N_CEU_founder"])
-    N_CEU_early  = float(sampled["N_CEU_early"])
-    r_YRI        = float(sampled["r_YRI"])
-    r_CEU_early  = float(sampled["r_CEU_early"])
-    r_CEU        = float(sampled["r_CEU"])
-    T_AF         = float(sampled["T_AF"])
-    T_OOA        = float(sampled["T_OOA"])
+    N_anc = float(sampled["N_anc"])
+    N_YRI_anc = float(sampled["N_YRI_anc"])
+    N_CEU_founder = float(sampled["N_CEU_founder"])
+    N_CEU_early = float(sampled["N_CEU_early"])
+    r_YRI = float(sampled["r_YRI"])
+    r_CEU_early = float(sampled["r_CEU_early"])
+    r_CEU = float(sampled["r_CEU"])
+    T_AF = float(sampled["T_AF"])
+    T_OOA = float(sampled["T_OOA"])
     T_CEU_expand = float(sampled["T_CEU_expand"])
-    T_growth     = float(sampled["T_growth"])
-    m_founder    = float(sampled["m_founder"])
-    m_modern     = float(sampled["m_modern"])
+    T_growth = float(sampled["T_growth"])
+    m_founder = float(sampled["m_founder"])
+    m_modern = float(sampled["m_modern"])
 
-    assert T_AF > T_OOA > T_CEU_expand > T_growth > 0, \
-        "Need T_AF > T_OOA > T_CEU_expand > T_growth > 0"
+    assert (
+        T_AF > T_OOA > T_CEU_expand > T_growth > 0
+    ), "Need T_AF > T_OOA > T_CEU_expand > T_growth > 0"
 
     # Derive present-day and boundary sizes from growth rates
     # N_CEU_early is the size at T_CEU_expand; grow it forward to T_growth
@@ -97,9 +123,14 @@ def OOA(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
         "YRI",
         description="African population (YRI)",
         epochs=[
-            dict(start_size=N_anc,     end_time=T_AF,        size_function="constant"),
-            dict(start_size=N_YRI_anc, end_time=T_growth,    size_function="constant"),
-            dict(start_size=N_YRI_anc, end_size=N_YRI,       end_time=0, size_function="exponential"),
+            dict(start_size=N_anc, end_time=T_AF, size_function="constant"),
+            dict(start_size=N_YRI_anc, end_time=T_growth, size_function="constant"),
+            dict(
+                start_size=N_YRI_anc,
+                end_size=N_YRI,
+                end_time=0,
+                size_function="exponential",
+            ),
         ],
     )
 
@@ -110,18 +141,39 @@ def OOA(sampled: Dict[str, float], cfg: Optional[Dict] = None) -> demes.Graph:
         ancestors=["YRI"],
         start_time=T_OOA,
         epochs=[
-            dict(start_size=N_CEU_founder, end_time=T_CEU_expand, size_function="constant"),
-            dict(start_size=N_CEU_early,   end_size=N_CEU_at_Tgrowth, end_time=T_growth, size_function="exponential"),
-            dict(start_size=N_CEU_at_Tgrowth, end_size=N_CEU,   end_time=0, size_function="exponential"),
+            dict(
+                start_size=N_CEU_founder,
+                end_time=T_CEU_expand,
+                size_function="constant",
+            ),
+            dict(
+                start_size=N_CEU_early,
+                end_size=N_CEU_at_Tgrowth,
+                end_time=T_growth,
+                size_function="exponential",
+            ),
+            dict(
+                start_size=N_CEU_at_Tgrowth,
+                end_size=N_CEU,
+                end_time=0,
+                size_function="exponential",
+            ),
         ],
     )
 
     # Higher migration during founder phase
     if m_founder > 0:
-        b.add_migration(demes=["YRI", "CEU"], rate=m_founder, start_time=T_OOA, end_time=T_CEU_expand)
+        b.add_migration(
+            demes=["YRI", "CEU"],
+            rate=m_founder,
+            start_time=T_OOA,
+            end_time=T_CEU_expand,
+        )
 
     # Lower migration after CEU starts expanding
     if m_modern > 0:
-        b.add_migration(demes=["YRI", "CEU"], rate=m_modern, start_time=T_CEU_expand, end_time=0)
+        b.add_migration(
+            demes=["YRI", "CEU"], rate=m_modern, start_time=T_CEU_expand, end_time=0
+        )
 
     return b.resolve()

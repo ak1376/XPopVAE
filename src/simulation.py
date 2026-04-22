@@ -22,6 +22,7 @@ from src.demes_models import IM_symmetric_model, OOA
 # Minimal helpers
 # ──────────────────────────────────
 
+
 def sample_params(
     priors: Dict[str, List[float]], *, rng: Optional[np.random.Generator] = None
 ) -> Dict[str, float]:
@@ -34,9 +35,7 @@ def sample_params(
     return params
 
 
-def build_demes_graph(
-    model_type: str, sampled_params: Dict[str, float]
-) -> demes.Graph:
+def build_demes_graph(model_type: str, sampled_params: Dict[str, float]) -> demes.Graph:
     """
     Build a Demes graph for the given model_type + sampled_params.
     Mirrors the logic inside simulation(...), but returns only the graph.
@@ -47,12 +46,12 @@ def build_demes_graph(
         return OOA(sampled_params)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
-    
+
 
 def simulation_runner(
     g: demes.Graph, experiment_config: Dict[str, Any]
 ) -> Tuple[tskit.TreeSequence, demes.Graph]:
-    
+
     species = experiment_config.get("species", "HomSap")
     sp = sps.get_species(species)
 
@@ -67,15 +66,15 @@ def simulation_runner(
 
     genome_length = experiment_config["genome_length"]
     mutation_rate = experiment_config["mutation_rate"]
-    recombination_rate = experiment_config['recombination_rate']
+    recombination_rate = experiment_config["recombination_rate"]
 
     contig = sp.get_contig(
-          chromosome=None,
-          length=genome_length,
-          mutation_rate=mutation_rate,
-          recombination_rate=recombination_rate,
-      )
-    
+        chromosome=None,
+        length=genome_length,
+        mutation_rate=mutation_rate,
+        recombination_rate=recombination_rate,
+    )
+
     print(f'• Using engine: {experiment_config.get("engine")}')
     print("contig.length:", contig.length)
     print("contig.mutation_rate:", contig.mutation_rate)
@@ -88,12 +87,7 @@ def simulation_runner(
 
     eng = sps.get_engine("msprime")
 
-    ts = eng.simulate(
-        model,
-        contig,
-        samples,
-        seed=seed
-    )
+    ts = eng.simulate(model, contig, samples, seed=seed)
 
     return ts, g
 
@@ -107,10 +101,7 @@ def simulation(
 
     g = build_demes_graph(model_type=model_type, sampled_params=sampled_params)
 
-    return simulation_runner(
-        g, experiment_config
-    )
-
+    return simulation_runner(g, experiment_config)
 
 
 def _individual_genotype_matrix(ts: tskit.TreeSequence) -> np.ndarray:
@@ -132,6 +123,7 @@ def _individual_genotype_matrix(ts: tskit.TreeSequence) -> np.ndarray:
 
     return G_ind
 
+
 def create_SFS(ts: tskit.TreeSequence) -> moments.Spectrum:
     """Build a moments.Spectrum using pops that have sampled individuals."""
     sample_sets: List[np.ndarray] = []
@@ -150,7 +142,6 @@ def create_SFS(ts: tskit.TreeSequence) -> moments.Spectrum:
     sfs = moments.Spectrum(arr)
     sfs.pop_ids = pop_ids
     return sfs
-
 
 
 def calculate_fst(ts: tskit.TreeSequence) -> float:

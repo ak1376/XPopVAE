@@ -59,23 +59,32 @@ def extract_std(model, dataloader, device, use_masked_input=False):
 
 def extract_latent(model, dataloader, device, use_masked_input=False):
     """Extract mu+std concatenated latent vector and labels."""
-    mu,  labels = extract_mu(model,  dataloader, device, use_masked_input=use_masked_input)
-    std, _      = extract_std(model, dataloader, device, use_masked_input=use_masked_input)
+    mu, labels = extract_mu(
+        model, dataloader, device, use_masked_input=use_masked_input
+    )
+    std, _ = extract_std(model, dataloader, device, use_masked_input=use_masked_input)
     latent = np.concatenate([mu, np.exp(0.5 * std)], axis=1)
     return latent, labels
+
 
 def extract_latent_with_pheno(model, dataloader, device, use_masked_input=False):
     """Extract mu+std concatenated latent vector, population labels, and phenotype predictions."""
     from src.plotting import extract_pheno_predictions
 
-    latent, labels = extract_latent(model, dataloader, device, use_masked_input=use_masked_input)
-    y_true, y_pred, _ = extract_pheno_predictions(model, dataloader, device, use_masked_input=use_masked_input)
+    latent, labels = extract_latent(
+        model, dataloader, device, use_masked_input=use_masked_input
+    )
+    y_true, y_pred, _ = extract_pheno_predictions(
+        model, dataloader, device, use_masked_input=use_masked_input
+    )
 
     return latent, labels, y_true, y_pred
+
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
 
 def load_vae_config(path: Path) -> dict:
     with open(path) as f:
@@ -110,20 +119,20 @@ def make_eval_loader(
     Build a val-style TensorDataset/DataLoader for one evaluation split.
     Tuple order: (input_x, original_x, pheno, mask, pop_label)
     """
-    geno_t  = torch.tensor(geno,       dtype=torch.float32).unsqueeze(1)
+    geno_t = torch.tensor(geno, dtype=torch.float32).unsqueeze(1)
     pheno_t = torch.tensor(pheno_norm, dtype=torch.float32).unsqueeze(1)
 
     if masking:
         input_x, mask = masker.mask(geno_t)
         np.save(out_dir / f"masked_{split_name}.npy", input_x.numpy())
-        np.save(out_dir / f"mask_{split_name}.npy",   mask.numpy())
+        np.save(out_dir / f"mask_{split_name}.npy", mask.numpy())
     else:
         input_x = geno_t
-        mask    = torch.zeros(geno_t.shape[0], geno_t.shape[2], dtype=torch.bool)
+        mask = torch.zeros(geno_t.shape[0], geno_t.shape[2], dtype=torch.bool)
 
     pop_labels = torch.full((len(geno_t),), pop_label_value, dtype=torch.long)
 
-    ds     = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
+    ds = TensorDataset(input_x, geno_t, pheno_t, mask, pop_labels)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
     return loader
 
@@ -142,10 +151,9 @@ def run_eval_plots(
     shared_scaler=None,
     shared_pca=None,
 ):
-    """
-    Run a full evaluation pass for one split and save all plots + metrics
-    into out_dir/split_name/.
-    """
+    import json
+    from src.plotting import extract_pheno_predictions
+
     split_dir = out_dir / split_name
     split_dir.mkdir(parents=True, exist_ok=True)
 
@@ -158,8 +166,10 @@ def run_eval_plots(
         beta=beta,
         gamma=gamma,
     )
-    print(f"\n[{split_name}] loss={loss:.6f}  recon={recon_unmasked:.6f}  "
-          f"kl={kl:.6f}  pheno_loss={pheno_loss:.6f}")
+    print(
+        f"\n[{split_name}] loss={loss:.6f}  recon={recon_unmasked:.6f}  "
+        f"kl={kl:.6f}  pheno_loss={pheno_loss:.6f}"
+    )
 
     recon_metrics = plot_reconstruction(
         model=model,
@@ -170,7 +180,9 @@ def run_eval_plots(
     )
     print(f"[{split_name}] balanced_accuracy={recon_metrics['balanced_accuracy']:.6f}")
 
-    latent_vecs, labels = extract_latent(model, loader, device, use_masked_input=use_masked)
+    latent_vecs, labels = extract_latent(
+        model, loader, device, use_masked_input=use_masked
+    )
     plot_latent_space(
         latent_vectors=latent_vecs,
         labels=labels,
@@ -189,7 +201,19 @@ def run_eval_plots(
         use_masked_input=use_masked,
         title=f"{split_name} phenotype prediction",
     )
-    print(f"[{split_name}] pheno RMSE={pheno_metrics['rmse']:.6f}  R²={pheno_metrics['r2']:.6f}")
+    print(
+        f"[{split_name}] pheno RMSE={pheno_metrics['rmse']:.6f}  R²={pheno_metrics['r2']:.6f}"
+    )
+
+    # --- save R² and predictions ---
+    y_true, y_pred, _ = extract_pheno_predictions(
+        model, loader, device, use_masked_input=use_masked
+    )
+    np.save(split_dir / "true_phenotypes.npy", y_true)
+    np.save(split_dir / "predicted_phenotypes.npy", y_pred)
+    (split_dir / "phenotype_r2.json").write_text(
+        json.dumps({"r2": pheno_metrics["r2"], "rmse": pheno_metrics["rmse"]}, indent=2)
+    )
 
     plot_pheno_predictions_by_population(
         model=model,
@@ -211,19 +235,22 @@ def run_eval_plots(
 
     return recon_metrics, pheno_metrics
 
-def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device) -> "ConvVAE":
+
+def load_model_from_checkpoint(
+    checkpoint_path: Path, device: torch.device
+) -> "ConvVAE":
     from src.model import ConvVAE
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    vae_config   = checkpoint["vae_config"]
+    vae_config = checkpoint["vae_config"]
     input_length = int(checkpoint["input_length"])
 
     pheno_hidden_dim = vae_config.get("phenotype", {}).get("pheno_hidden_dim", None)
 
-    da_cfg         = vae_config.get("domain_adaptation", {})
-    use_grl        = bool(da_cfg.get("use_grl", False))
-    raw            = da_cfg.get("grl_hidden_dim", None)
+    da_cfg = vae_config.get("domain_adaptation", {})
+    use_grl = bool(da_cfg.get("use_grl", False))
+    raw = da_cfg.get("grl_hidden_dim", None)
     grl_hidden_dim = int(raw) if raw is not None else None
 
     model = ConvVAE(

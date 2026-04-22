@@ -42,7 +42,9 @@ def run_simulation(
             simulation_number = "0000"
     else:
         if simulation_number is None:
-            existing = {int(p.name) for p in simulation_dir.glob("[0-9]*") if p.is_dir()}
+            existing = {
+                int(p.name) for p in simulation_dir.glob("[0-9]*") if p.is_dir()
+            }
             simulation_number = f"{max(existing, default=0) + 1:04d}"
         out_dir = simulation_dir / simulation_number
 
@@ -51,8 +53,12 @@ def run_simulation(
     # ── seed ──────────────────────────────────────────────────────────────────
     base_seed = cfg.get("seed")
     if base_seed is not None:
-        simulation_seed = int(base_seed) + int(simulation_number) * 1000 + int(replicate)
-        print(f"• Using seed {simulation_seed} (base={base_seed}, grid={simulation_number}, rep={replicate})")
+        simulation_seed = (
+            int(base_seed) + int(simulation_number) * 1000 + int(replicate)
+        )
+        print(
+            f"• Using seed {simulation_seed} (base={base_seed}, grid={simulation_number}, rep={replicate})"
+        )
         rng = np.random.default_rng(simulation_seed)
     else:
         simulation_seed = None
@@ -62,16 +68,18 @@ def run_simulation(
     # ── sample demographic params ─────────────────────────────────────────────
     grid_cfg = cfg.get("grid_sampling", {})
     if grid_cfg.get("enabled", False):
-        fixed     = grid_cfg["fixed_params"]
+        fixed = grid_cfg["fixed_params"]
         var_param = grid_cfg["varying_param"]
-        min_val   = float(grid_cfg["min_value"])
-        max_val   = float(grid_cfg["max_value"])
-        scale     = grid_cfg.get("scale", "linear")
-        num_grid  = int(grid_cfg.get("num_grid_points", 1))
-        grid_idx  = int(simulation_number)
+        min_val = float(grid_cfg["min_value"])
+        max_val = float(grid_cfg["max_value"])
+        scale = grid_cfg.get("scale", "linear")
+        num_grid = int(cfg["num_draws"])
+        grid_idx = int(simulation_number)
 
         if grid_idx < 0 or grid_idx >= num_grid:
-            raise ValueError(f"Simulation number {grid_idx} out of range [0, {num_grid}).")
+            raise ValueError(
+                f"Simulation number {grid_idx} out of range [0, {num_grid})."
+            )
 
         grid_vals = (
             np.linspace(min_val, max_val, num_grid)
@@ -81,7 +89,9 @@ def run_simulation(
         val = float(grid_vals[grid_idx])
         sampled_params = dict(fixed)
         sampled_params[var_param] = val
-        print(f"• Grid mode: {var_param}={val:.2f} (grid {grid_idx}/{num_grid-1}, rep {replicate})")
+        print(
+            f"• Grid mode: {var_param}={val:.2f} (grid {grid_idx}/{num_grid-1}, rep {replicate})"
+        )
     else:
         sampled_params = sample_params(cfg["priors"], rng=rng)
 
@@ -101,7 +111,7 @@ def run_simulation(
     )
 
     # ── compute + save artefacts ──────────────────────────────────────────────
-    sfs     = create_SFS(ts)
+    sfs = create_SFS(ts)
     fst_val = calculate_fst(ts)
     sampled_params["Fst"] = fst_val
     print(f"• Fst (YRI-CEU): {fst_val:.4f}")
@@ -125,13 +135,15 @@ def run_simulation(
 
 
 def main():
-    cli = argparse.ArgumentParser(description="Generate one neutral simulation (msprime)")
-    cli.add_argument("--simulation-dir",   type=Path, required=True)
+    cli = argparse.ArgumentParser(
+        description="Generate one neutral simulation (msprime)"
+    )
+    cli.add_argument("--simulation-dir", type=Path, required=True)
     cli.add_argument("--experiment-config", type=Path, required=True)
-    cli.add_argument("--model-type",       required=True, choices=["IM_symmetric", "OOA"])
+    cli.add_argument("--model-type", required=True, choices=["IM_symmetric", "OOA"])
     cli.add_argument("--simulation-number", type=str, default=None)
-    cli.add_argument("--replicate",        type=int, default=0)
-    cli.add_argument("--output-dir",       type=Path, default=None)
+    cli.add_argument("--replicate", type=int, default=0)
+    cli.add_argument("--output-dir", type=Path, default=None)
     args = cli.parse_args()
 
     run_simulation(

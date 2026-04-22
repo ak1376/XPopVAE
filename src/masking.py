@@ -42,7 +42,9 @@ class Masker:
 
         # pad if num_snps not divisible by block length
         if snp_mask.shape[1] < num_snps:
-            pad = torch.zeros(B, num_snps - snp_mask.shape[1], dtype=torch.bool, device=x.device)
+            pad = torch.zeros(
+                B, num_snps - snp_mask.shape[1], dtype=torch.bool, device=x.device
+            )
             snp_mask = torch.cat([snp_mask, pad], dim=1)
 
         # apply mask to channel 0
