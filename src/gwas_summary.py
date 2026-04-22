@@ -186,8 +186,9 @@ def plot_af_diff_vs_r2_gap(
     out_dir: Path,
 ) -> None:
     """
-    For each row in df (a single sim's replicates), compute mean |p_CEU - p_YRI|
-    at causal SNPs and plot against R² gap (val_r2 - test_r2).
+    For each row in df (a single sim's replicates), compute
+    mean |V_CEU - V_YRI| at causal SNPs, where V = effect² * p(1-p),
+    and plot against R² gap (val_r2 - test_r2).
     Called once per sim via the diagnose_replicates wildcard; out_dir is the
     per-sim subdirectory.
     """
@@ -208,9 +209,17 @@ def plot_af_diff_vs_r2_gap(
 
         causal_set = set(trait_df["site_id"].unique())
         idx = np.array([i for i, s in enumerate(biallelic_ids) if s in causal_set])
+
+        # align effect sizes to the same order as idx
+        effect_by_site = trait_df.groupby("site_id")["effect_size"].mean()
+        effects = np.array([effect_by_site[s] for s in biallelic_ids[idx]])
+
         p_ceu = disc_train.mean(axis=0)[idx] / 2.0
         p_yri = target_ho.mean(axis=0)[idx] / 2.0
-        af_diff = float(np.abs(p_ceu - p_yri).mean())
+
+        v_ceu = effects**2 * p_ceu * (1.0 - p_ceu)
+        v_yri = effects**2 * p_yri * (1.0 - p_yri)
+        mean_v_diff = float(np.abs(v_ceu - v_yri).mean())
 
         rows.append(
             {
@@ -218,14 +227,14 @@ def plot_af_diff_vs_r2_gap(
                 "r2_disc": row["val_r2"],
                 "r2_target": row["test_r2"],
                 "r2_gap": row["val_r2"] - row["test_r2"],
-                "mean_af_diff_causal": af_diff,
+                "mean_v_diff_causal": mean_v_diff,
             }
         )
 
     diag_df = pd.DataFrame(rows)
     diag_df.to_csv(out_dir / "replicate_stats.csv", index=False)
 
-    x = diag_df["mean_af_diff_causal"].values
+    x = diag_df["mean_v_diff_causal"].values
     y = diag_df["r2_gap"].values
     mask = ~(np.isnan(x) | np.isnan(y))
 
@@ -242,7 +251,7 @@ def plot_af_diff_vs_r2_gap(
     for _, r in diag_df[mask].iterrows():
         ax.annotate(
             r["label"],
-            (r["mean_af_diff_causal"], r["r2_gap"]),
+            (r["mean_v_diff_causal"], r["r2_gap"]),
             textcoords="offset points",
             xytext=(6, 3),
             fontsize=9,
@@ -254,16 +263,16 @@ def plot_af_diff_vs_r2_gap(
         xline = np.linspace(x[mask].min(), x[mask].max(), 100)
         ax.plot(xline, m * xline + b, "k--", lw=1, alpha=0.5)
         ax.set_title(
-            f"AF difference at causal SNPs vs R² gap  (Sim {sim_number})\n"
+            f"Variance contribution gap at causal SNPs vs R² gap  (Sim {sim_number})\n"
             f"Pearson r={r_val:.3f}, p={p_val:.3f}  (n={mask.sum()} replicates)",
             fontsize=11,
             fontweight="bold",
         )
 
-    ax.set_xlabel("mean( |p_CEU − p_YRI| ) at causal SNPs", fontsize=11)
+    ax.set_xlabel("mean( |V_CEU − V_YRI| ) at causal SNPs,  V = β² p(1−p)", fontsize=11)
     ax.set_ylabel("R² gap  (R²_CEU − R²_YRI)", fontsize=11)
     fig.suptitle(
-        f"Do allele frequency differences at causal SNPs\n"
+        f"Do variance contributions at causal SNPs\n"
         f"explain the CEU→YRI portability gap?  (Sim {sim_number})",
         fontsize=11,
         fontweight="bold",

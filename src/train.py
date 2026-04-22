@@ -161,10 +161,7 @@ def train_one_epoch(
             d_loss = domain_loss(domain_logits, pop_label)
             d_acc = domain_accuracy(domain_logits, pop_label)
 
-            # Adaptive scaling: penalise harder when the classifier is more
-            # accurate (i.e. the latent space is still domain-separable).
-            effective_delta = delta * d_acc
-            loss = loss + effective_delta * d_loss
+            loss = loss + delta * d_loss
 
             total_domain_loss += d_loss.item()
             total_domain_acc += d_acc
