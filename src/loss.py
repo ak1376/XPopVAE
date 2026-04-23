@@ -76,3 +76,24 @@ def vae_loss(
         + gamma * pheno_loss
     )
     return loss, recon_unmasked, recon_masked, kl, pheno_loss
+
+def mmd_loss(z_ceu: torch.Tensor, z_yri: torch.Tensor, kernel_bandwidths: list = [0.5, 1.0, 2.0, 5.0]) -> torch.Tensor:
+    """
+    Maximum Mean Discrepancy between CEU and YRI latent vectors.
+    Returns 0 if either population is absent in this batch.
+    """
+    if z_ceu.shape[0] == 0 or z_yri.shape[0] == 0:
+        return torch.tensor(0.0, device=z_ceu.device, requires_grad=False)
+
+    def rbf_kernel(a, b, bandwidth):
+        sq_dist = torch.cdist(a, b, p=2).pow(2)
+        return torch.exp(-sq_dist / (2 * bandwidth ** 2))
+
+    def mixture_kernel(a, b):
+        return sum(rbf_kernel(a, b, bw) for bw in kernel_bandwidths) / len(kernel_bandwidths)
+
+    k_cc = mixture_kernel(z_ceu, z_ceu).mean()
+    k_yy = mixture_kernel(z_yri, z_yri).mean()
+    k_cy = mixture_kernel(z_ceu, z_yri).mean()
+
+    return k_cc + k_yy - 2 * k_cy

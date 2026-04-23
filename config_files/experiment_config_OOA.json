@@ -11,7 +11,7 @@
   "discovery_train_frac": 0.8,
   "target_held_out_frac": 0.8,
   "seed": 42,
-  "num_draws": 20,
+  "num_draws": 1,
   "num_replicates": 10,
   "priors": {
       "N_anc":         [7310,    7310],
@@ -32,7 +32,7 @@
     "grid_sampling": {
     "enabled": true,
     "varying_param": "T_OOA",
-    "min_value": 1000,
+    "min_value": 5000,
     "max_value": 5000,
     "scale": "linear",
     "fixed_params": {

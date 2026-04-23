@@ -5,8 +5,8 @@ from src.loss import (
     kl_loss,
     phenotype_loss,
     domain_loss,
+    mmd_loss,
 )
-
 # =============================================================================
 # GRL lambda schedule
 # =============================================================================
@@ -58,43 +58,10 @@ def train_one_epoch(
     gamma: float = 1.0,
     # --- GRL ---
     use_grl: bool = False,
+    # --- MMD ---
+    use_mmd: bool = False,
     delta: float = 1.0,
 ):
-    """
-    Train for one epoch.
-
-    GRL domain loss
-    ---------------
-    When use_grl=True the model returns domain_logits, and we add:
-
-        effective_delta * domain_loss
-
-    to the total loss, where:
-
-        effective_delta = delta * domain_acc
-
-    The adaptive scaling means the encoder is pushed hardest when the
-    domain classifier is most accurate (latent space still domain-
-    separable). As the encoder fools the classifier, the signal naturally
-    shrinks toward zero.
-
-    The GRL layer's reversal strength (lambda) is set externally via
-    model.set_grl_lambda() before each epoch — use compute_grl_lambda()
-    in run_vae.py for the Ganin et al. warmup schedule.
-
-    Latent subspace diagnostics
-    ---------------------------
-    Each epoch we track the average per-dimension variance of z_shared
-    and z_pop across all batches. If z_pop_var trends to zero, the encoder
-    is collapsing the population-specific subspace into z_shared, meaning
-    the split is not working as intended.
-
-    Returns
-    -------
-    Tuple of 9 floats:
-        total_loss, recon_unmasked, recon_masked, kl, pheno,
-        domain_ce, domain_acc, z_shared_var, z_pop_var
-    """
     model.train()
 
     total_loss = 0.0
@@ -128,7 +95,6 @@ def train_one_epoch(
         out, mu, logvar, z, pheno_pred, domain_logits = model(input_x)
         targets = x.squeeze(1).long()
 
-        # latent subspace diagnostics — logged every batch, averaged over epoch
         stats = model.latent_stats(mu)
         total_z_shared_var += stats["z_shared_var"]
         if has_z_pop:
@@ -155,16 +121,21 @@ def train_one_epoch(
         )
 
         # ------------------------------------------------------------------
-        # GRL domain loss
+        # Domain adaptation loss — GRL or MMD, mutually exclusive
         # ------------------------------------------------------------------
         if use_grl and domain_logits is not None:
             d_loss = domain_loss(domain_logits, pop_label)
             d_acc = domain_accuracy(domain_logits, pop_label)
-
             loss = loss + delta * d_loss
-
             total_domain_loss += d_loss.item()
             total_domain_acc += d_acc
+        elif use_mmd:
+            ceu_z = mu[pop_label == 0, :model.shared_dim]
+            yri_z = mu[pop_label == 1, :model.shared_dim]
+            m_loss = mmd_loss(ceu_z, yri_z)
+            loss = loss + delta * m_loss
+            total_domain_loss += m_loss.item()
+            total_domain_acc += 0.0  # no classifier when using MMD
         else:
             total_domain_loss += 0.0
             total_domain_acc += 0.0
@@ -191,7 +162,6 @@ def train_one_epoch(
         total_z_shared_var / n,
         total_z_pop_var / n if has_z_pop else None,
     )
-
 
 # =============================================================================
 # Evaluation

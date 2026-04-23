@@ -277,7 +277,7 @@ rule all:
             sim_number=SIM_NUMBERS,
         ),
         
-        # # # --- VAE checkpoints ---
+        # # # # --- VAE checkpoints ---
         expand(
             VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
             sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,

@@ -129,6 +129,7 @@ def main(
     # ------------------------------------------------------------------
     da_cfg = vae_config.get("domain_adaptation", {})
     use_grl = bool(da_cfg.get("use_grl", False))
+    use_mmd = bool(da_cfg.get("use_mmd", False))
     raw = da_cfg.get("grl_hidden_dim", None)
     grl_hidden_dim = int(raw) if raw is not None else None
     grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
@@ -395,6 +396,7 @@ def main(
             alpha=alpha,
             gamma=gamma,
             use_grl=use_grl,
+            use_mmd=use_mmd,
             delta=delta,
         )
 
@@ -431,14 +433,15 @@ def main(
         val_kl_list.append(val_kl)
         val_phenotype_loss_list.append(val_pheno)
 
-        grl_str = (
-            (
+        if use_grl:
+            grl_str = (
                 f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
                 f"  domain_acc={train_d_acc:.3f}"
             )
-            if use_grl
-            else ""
-        )
+        elif use_mmd:
+            grl_str = f" | mmd_loss={train_domain:.4f}"
+        else:
+            grl_str = ""
 
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
@@ -527,7 +530,7 @@ def main(
         val_pheno_losses=val_phenotype_loss_list,
         train_recon_masked_losses=train_recon_masked_list if masking else None,
         val_recon_masked_losses=val_recon_masked_list if masking else None,
-        train_domain_losses=train_domain_loss_list if use_grl else None,
+        train_domain_losses=train_domain_loss_list if (use_grl or use_mmd) else None,
         train_domain_accs=train_domain_acc_list if use_grl else None,
         train_z_shared_vars=train_z_shared_var_list,
         train_z_pop_vars=(
