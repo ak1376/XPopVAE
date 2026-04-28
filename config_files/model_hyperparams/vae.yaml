@@ -13,6 +13,8 @@ model:
   stride: 2
   padding: 8
   use_batchnorm: false
+  use_causal_channel: false
+
 training:
   batch_size: 64
   max_epochs: 300
@@ -46,15 +48,20 @@ phenotype:
   gamma: 2.0
   pheno_weight_decay: 0.0
 domain_adaptation:
+<<<<<<< HEAD
   use_grl: true
   use_mmd: false
+=======
+  use_grl: false
+>>>>>>> 497c6cf (Adding an "oracle" mode where I pass in a channel with a binary mask of the causal SNPs. This can be toggled on and off.)
   grl_hidden_dim: null
   lambda_max: 1.0
   delta: 1.0
 seed: 0
 grid:
-  enabled: false
+  enabled: true
   name:
+<<<<<<< HEAD
     prefix: vae_grl
     sep: __
   dims:
@@ -63,3 +70,32 @@ grid:
     - true
     - false
     tag: use_grl
+=======
+    prefix: "vae_causal_ablation"
+    sep: "__"
+  dims:
+    - path: "domain_adaptation.use_grl"
+      values: [True]
+      tag: "use_grl"
+    # - path: "model.use_causal_channel"
+    #   values: [True]
+    #   tag: "causal"
+    # - path: model.shared_dim
+    #   values: [8, 16, 32, 64, 100, 120]
+    #   tag: "shared_dim"
+    # - path: "phenotype.gamma"
+    #   values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
+    #   tag: "gamma"
+    # - path: "domain_adaptation.lambda_max"
+    #   values: [0.0, 0.25, 0.5, 0.75, 1.0]
+    #   tag: "lambda_max"
+    # - path: "training.beta"
+    #   values: [ 0.001, 0.01, 0.07, 0.1, 0.3]
+    #   tag: "beta"
+    # - path: model.latent_dim
+    #   values: [256, 512, 1024]
+    #   tag: "latent_dim"
+    # - path: phenotype.gamma
+    #   values: [2, 4, 6, 8, 10]
+    #   tag: "gamma"
+>>>>>>> 497c6cf (Adding an "oracle" mode where I pass in a channel with a binary mask of the causal SNPs. This can be toggled on and off.)
