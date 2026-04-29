@@ -74,11 +74,13 @@ def train_one_epoch(
     total_z_shared_var = 0.0
     has_z_pop = model.shared_dim < model.latent_dim
     total_z_pop_var = 0.0 if has_z_pop else None
+    batch_ceu_fracs = []
 
     for x, pheno, pop_label in dataloader:
         x = x.to(device)
         pheno = pheno.to(device)
         pop_label = pop_label.to(device)
+        batch_ceu_fracs.append((pop_label == 0).float().mean().item())
 
         if masker is not None:
             input_x, mask = masker.mask(x)
@@ -161,6 +163,7 @@ def train_one_epoch(
         total_domain_acc / n,
         total_z_shared_var / n,
         total_z_pop_var / n if has_z_pop else None,
+        batch_ceu_fracs,
     )
 
 # =============================================================================

@@ -43,6 +43,7 @@ from src.masking import Masker
 from src.model import ConvVAE
 from src.plotting import (
     plot_example_input_heatmap,
+    plot_lambda_vs_loss,
     plot_loss_curves,
     plot_latent_pca_shared_basis,
 )
@@ -353,6 +354,8 @@ def main(
     train_domain_acc_list = []
     train_z_shared_var_list = []
     train_z_pop_var_list = []
+    train_ceu_frac_list = []
+    grl_lambda_list = []
 
     val_loss_list, val_recon_unmasked_list = [], []
     val_recon_masked_list, val_kl_list = [], []
@@ -385,6 +388,7 @@ def main(
             train_d_acc,
             train_z_shared_var,
             train_z_pop_var,
+            train_ceu_frac,
         ) = train_one_epoch(
             model=model,
             dataloader=train_loader,
@@ -426,6 +430,8 @@ def main(
         train_domain_acc_list.append(train_d_acc)
         train_z_shared_var_list.append(train_z_shared_var)
         train_z_pop_var_list.append(train_z_pop_var)
+        grl_lambda_list.append(grl_lam)
+        train_ceu_frac_list.append(train_ceu_frac)  # list of per-batch fractions
 
         val_loss_list.append(val_loss)
         val_recon_unmasked_list.append(val_recon_unmasked)
@@ -507,6 +513,7 @@ def main(
         train_recon_masked_losses=np.array(train_recon_masked_list),
         val_recon_masked_losses=np.array(val_recon_masked_list),
         train_z_shared_var=np.array(train_z_shared_var_list),
+        train_ceu_frac=np.array(train_ceu_frac_list),  # shape: (epochs, batches_per_epoch)
         **(
             {"train_z_pop_var": np.array(train_z_pop_var_list)}
             if train_z_pop_var_list[0] is not None
@@ -516,6 +523,7 @@ def main(
     if use_grl:
         history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
         history_dict["train_domain_acc"] = np.array(train_domain_acc_list)
+        history_dict["grl_lambdas"] = np.array(grl_lambda_list)
 
     np.savez(out / "training_history.npz", **history_dict)
 
@@ -538,6 +546,13 @@ def main(
         ),
         output_dir=out,
     )
+
+    if use_grl:
+        plot_lambda_vs_loss(
+            lambda_values=grl_lambda_list,
+            train_domain_losses=train_domain_loss_list,
+            output_dir=out,
+        )
 
     # ------------------------------------------------------------------
     # reload best model

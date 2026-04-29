@@ -585,6 +585,30 @@ def plot_loss_curves(
 
 
 # ------------------------------------------------------------------
+# lambda vs loss (GRL schedule diagnostic)
+# ------------------------------------------------------------------
+def plot_lambda_vs_loss(
+    lambda_values,
+    train_domain_losses,
+    output_dir,
+):
+    """Plot domain loss against GRL lambda value (training only)."""
+    _ensure_dir(output_dir)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(lambda_values, train_domain_losses, linewidth=1.5)
+    ax.set_xlabel("GRL λ")
+    ax.set_ylabel("domain loss")
+    ax.set_title(
+        "Domain loss vs GRL λ\n"
+        "(λ ramps from 0 → λ_max via Ganin et al. schedule)"
+    )
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/loss_vs_lambda.png", dpi=300)
+    plt.close()
+
+
+# ------------------------------------------------------------------
 # masking diagnostic
 # ------------------------------------------------------------------
 def plot_example_input_heatmap(

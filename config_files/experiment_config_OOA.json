@@ -8,11 +8,11 @@
     "CEU": 1000
   },
   "discovery": "CEU",
-  "discovery_train_frac": 0.8,
-  "target_held_out_frac": 0.8,
+  "discovery_train_frac": 0.5,
+  "target_held_out_frac": 0.5,
   "seed": 42,
   "num_draws": 1,
-  "num_replicates": 10,
+  "num_replicates": 1,
   "priors": {
       "N_anc":         [7310,    7310],
       "N_YRI_anc":     [14474,   14474],

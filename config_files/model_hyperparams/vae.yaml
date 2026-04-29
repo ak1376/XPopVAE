@@ -1,7 +1,7 @@
 model:
   model_type: fully_conv
   latent_dim: 128
-  shared_dim: 64
+  shared_dim: 128
   hidden_channels:
   - 32
   - 64
@@ -45,15 +45,10 @@ masking:
   constant_value: -1.0
 phenotype:
   pheno_hidden_dim: null
-  gamma: 2.0
+  gamma: 1.0
   pheno_weight_decay: 0.0
 domain_adaptation:
-<<<<<<< HEAD
-  use_grl: true
-  use_mmd: false
-=======
   use_grl: false
->>>>>>> 497c6cf (Adding an "oracle" mode where I pass in a channel with a binary mask of the causal SNPs. This can be toggled on and off.)
   grl_hidden_dim: null
   lambda_max: 1.0
   delta: 1.0
@@ -61,31 +56,24 @@ seed: 0
 grid:
   enabled: true
   name:
-<<<<<<< HEAD
-    prefix: vae_grl
-    sep: __
-  dims:
-  - path: domain_adaptation.use_grl
-    values:
-    - true
-    - false
-    tag: use_grl
-=======
-    prefix: "vae_causal_ablation"
+    prefix: "vae_grl_no_phenotype_loss"
     sep: "__"
   dims:
     - path: "domain_adaptation.use_grl"
-      values: [True]
+      values: [True, False]
       tag: "use_grl"
+    - path: phenotype.gamma
+      values: [1.0]
+      tag: "gamma"
+    # - path: "domain_adaptation.delta"
+    #   values: [4.0]
+    #   tag: "delta"
     # - path: "model.use_causal_channel"
     #   values: [True]
     #   tag: "causal"
     # - path: model.shared_dim
     #   values: [8, 16, 32, 64, 100, 120]
     #   tag: "shared_dim"
-    # - path: "phenotype.gamma"
-    #   values: [0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.0]
-    #   tag: "gamma"
     # - path: "domain_adaptation.lambda_max"
     #   values: [0.0, 0.25, 0.5, 0.75, 1.0]
     #   tag: "lambda_max"
@@ -98,4 +86,3 @@ grid:
     # - path: phenotype.gamma
     #   values: [2, 4, 6, 8, 10]
     #   tag: "gamma"
->>>>>>> 497c6cf (Adding an "oracle" mode where I pass in a channel with a binary mask of the causal SNPs. This can be toggled on and off.)

@@ -304,8 +304,11 @@ rule all:
         #     VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
         #     exp_id=EXP_IDS,
         # ),
-        # # --- baselines ---
-        # PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+        # --- baselines ---
+        expand(
+            PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
         
 # =============================================================================
 # 1. Run one simulation
@@ -703,16 +706,16 @@ rule diagnose_allelefreq_vs_ld:
 rule run_baselines:
     input:
         script=BASELINE_SCRIPT,
-        x_train=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_train.npy",
-        y_train=PROC_BASEDIR / "0/rep0/phenotypes/discovery_train_pheno.npy",
-        x_val=PROC_BASEDIR / "0/rep0/genotype_matrices/discovery_validation.npy",
-        y_val=PROC_BASEDIR / "0/rep0/phenotypes/discovery_validation_pheno.npy",
-        x_test=PROC_BASEDIR / "0/rep0/genotype_matrices/target_held_out.npy",
-        y_test=PROC_BASEDIR / "0/rep0/phenotypes/target_held_out_pheno.npy",
+        x_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        y_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        x_val=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+        y_val=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+        x_test=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+        y_test=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
     output:
-        results=PROC_BASEDIR / "0/rep0/baselines/baseline_results.txt",
+        results=PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
     params:
-        out_dir=PROC_BASEDIR / "0/rep0/baselines",
+        out_dir=lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / "baselines",
         h2=float(EXP_CFG.get("heritability", 1.0)),
         seed=42,
     shell:
