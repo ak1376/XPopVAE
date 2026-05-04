@@ -62,9 +62,9 @@ grid:
     - path: "domain_adaptation.use_grl"
       values: [True, False]
       tag: "use_grl"
-    - path: phenotype.gamma
-      values: [1.0]
-      tag: "gamma"
+    # - path: phenotype.gamma
+    #   values: [1.0]
+    #   tag: "gamma"
     # - path: "domain_adaptation.delta"
     #   values: [4.0]
     #   tag: "delta"

@@ -76,11 +76,13 @@ def build_experiment_grid(base_cfg):
 # Load config files
 # =============================================================================
 
-EXP_CFG_PATH  = Path("/sietch_colab/akapoor/XPopVAE/config_files/experiment_config_OOA.json")
+SIM_CFG_PATH  = Path("/sietch_colab/akapoor/XPopVAE/config_files/simulation_config_OOA.json")
+PROC_CFG_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/processing_config_OOA.json")
 VAE_YAML_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/model_hyperparams/vae.yaml")
 
-EXP_CFG = json.loads(EXP_CFG_PATH.read_text())
-VAE_CFG = yaml.safe_load(VAE_YAML_PATH.read_text())
+SIM_CFG  = json.loads(SIM_CFG_PATH.read_text())
+PROC_CFG = json.loads(PROC_CFG_PATH.read_text())
+VAE_CFG  = yaml.safe_load(VAE_YAML_PATH.read_text())
 
 EXPERIMENTS = build_experiment_grid(VAE_CFG)
 EXP_IDS     = sorted(EXPERIMENTS.keys())
@@ -93,15 +95,16 @@ for exp_id, spec in EXPERIMENTS.items():
 # Core settings from experiment config
 # =============================================================================
 
-MODEL                = EXP_CFG["demographic_model"]
-NUM_DRAWS            = int(EXP_CFG.get("num_draws", 1))
-NUM_REPLICATES       = int(EXP_CFG.get("num_replicates", 1))
-MAF_THRESHOLD        = float(EXP_CFG.get("maf_threshold", 0.0))
-DISCOVERY_POP        = str(EXP_CFG.get("discovery", "CEU"))
-SPLIT_SEED           = int(EXP_CFG.get("seed", 42))
-DISC_TRAIN_FRAC      = float(EXP_CFG.get("discovery_train_frac", 0.8))
-TARGET_HELD_OUT_FRAC = float(EXP_CFG.get("target_held_out_frac", 0.8))
-HAS_TARGET_TRAIN = TARGET_HELD_OUT_FRAC < 1.0
+MODEL          = SIM_CFG["demographic_model"]
+NUM_DRAWS      = int(SIM_CFG.get("num_draws", 1))
+NUM_REPLICATES = int(SIM_CFG.get("num_replicates", 1))
+
+MAF_THRESHOLD        = float(PROC_CFG.get("maf_threshold", 0.0))
+DISCOVERY_POP        = str(PROC_CFG.get("discovery", "CEU"))
+SPLIT_SEED           = int(PROC_CFG.get("seed", 42))
+DISC_TRAIN_FRAC      = float(PROC_CFG.get("discovery_train_frac", 0.8))
+TARGET_HELD_OUT_FRAC = float(PROC_CFG.get("target_held_out_frac", 0.8))
+HAS_TARGET_TRAIN     = TARGET_HELD_OUT_FRAC < 1.0
 
 print("Loaded experiment config:")
 print(f"  MODEL={MODEL}")
@@ -317,7 +320,7 @@ rule all:
 rule run_simulation:
     input:
         script=SIM_SCRIPT,
-        experiment_config=EXP_CFG_PATH,
+        simulation_config=SIM_CFG_PATH,
     output:
         tree=SIM_BASEDIR / "{sim_number}/rep{replicate}/tree_sequence.trees",
         sfs=SIM_BASEDIR / "{sim_number}/rep{replicate}/SFS.pkl",
@@ -331,7 +334,7 @@ rule run_simulation:
         r"""
         python {input.script} \
             --simulation-dir {params.simulation_dir} \
-            --experiment-config {input.experiment_config} \
+            --experiment-config {input.simulation_config} \
             --model-type {params.model_type} \
             --simulation-number {wildcards.sim_number} \
             --replicate {wildcards.replicate} \
@@ -346,22 +349,19 @@ rule build_genotypes:
     input:
         script=BUILD_GT_SCRIPT,
         tree=SIM_BASEDIR / "{sim_number}/rep{replicate}/tree_sequence.trees",
-        experiment_config=EXP_CFG_PATH,
+        processing_config=PROC_CFG_PATH,
     output:
-        # genotype_matrices/
         training=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/training.npy",
         discovery_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
         discovery_validation=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
         target_train=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_train.npy",
         target_held_out=PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
         trait_df=PROC_BASEDIR / "{sim_number}/rep{replicate}/trait_df.pkl",
-        # phenotypes/
         training_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/training_pheno.npy",
         discovery_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
         discovery_validation_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
         target_train_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_train_pheno.npy",
         target_held_out_pheno=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
-        # auxiliary
         phenotype_pkl=PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotype.pkl",
         disc_train_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_train_idx.npy",
         disc_val_idx=PROC_BASEDIR / "{sim_number}/rep{replicate}/discovery_val_idx.npy",
@@ -370,7 +370,6 @@ rule build_genotypes:
         variant_positions=PROC_BASEDIR / "{sim_number}/rep{replicate}/variant_positions_bp.npy",
         biallelic_site_ids=PROC_BASEDIR / "{sim_number}/rep{replicate}/biallelic_site_ids.npy",
         maf_filter_report=PROC_BASEDIR / "{sim_number}/rep{replicate}/maf_filter_report.txt",
-
     params:
         outdir=lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}",
     shell:
@@ -378,7 +377,7 @@ rule build_genotypes:
         python {input.script} \
             --tree {input.tree} \
             --outdir {params.outdir} \
-            --experiment-config-json {input.experiment_config} \
+            --experiment-config-json {input.processing_config} \
             --sim-number {wildcards.sim_number} \
             --replicate {wildcards.replicate}
         """
@@ -716,7 +715,7 @@ rule run_baselines:
         results=PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
     params:
         out_dir=lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / "baselines",
-        h2=float(EXP_CFG.get("heritability", 1.0)),
+        h2=float(PROC_CFG.get("heritability", 1.0)),
         seed=42,
     shell:
         r"""

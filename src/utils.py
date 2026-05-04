@@ -57,6 +57,32 @@ def extract_std(model, dataloader, device, use_masked_input=False):
     return np.concatenate(logvar_all, axis=0), np.concatenate(labels_all, axis=0)
 
 
+def extract_mu_and_z(model, dataloader, device, use_masked_input=False):
+    """Extract (mu, z, pop_labels) in a single encoder forward pass."""
+    model.eval()
+    mu_all, z_all, labels_all = [], [], []
+    with torch.no_grad():
+        for batch in dataloader:
+            if len(batch) == 3:
+                x = batch[0]
+                pop_label = batch[-1]
+            elif len(batch) == 5:
+                x = batch[0] if use_masked_input else batch[1]
+                pop_label = batch[-1]
+            else:
+                raise ValueError(f"Unexpected batch length {len(batch)}")
+            x = x.to(device)
+            _, mu, _, z, _, _ = model(x)
+            mu_all.append(mu.cpu().numpy())
+            z_all.append(z.cpu().numpy())
+            labels_all.append(pop_label.cpu().numpy())
+    return (
+        np.concatenate(mu_all, axis=0),
+        np.concatenate(z_all, axis=0),
+        np.concatenate(labels_all, axis=0),
+    )
+
+
 def extract_latent(model, dataloader, device, use_masked_input=False):
     """Extract mu+std concatenated latent vector and labels."""
     mu, labels = extract_mu(

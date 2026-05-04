@@ -46,11 +46,13 @@ from src.plotting import (
     plot_lambda_vs_loss,
     plot_loss_curves,
     plot_latent_pca_shared_basis,
+    plot_latent_activation_movie,
 )
 from src.train import evaluate, train_one_epoch, compute_grl_lambda
 
 from src.utils import (
     extract_latent,
+    extract_mu,
     load_vae_config,
     save_checkpoint,
     make_eval_loader,
@@ -357,6 +359,8 @@ def main(
     train_ceu_frac_list = []
     grl_lambda_list = []
 
+    latent_snapshots = []  # per-epoch (mu, z) snapshots for activation movie
+
     val_loss_list, val_recon_unmasked_list = [], []
     val_recon_masked_list, val_kl_list = [], []
     val_phenotype_loss_list = []
@@ -463,6 +467,21 @@ def main(
             )
         )
 
+        # collect latent snapshot for activation movie
+        mu_ceu, _ = extract_mu(
+            model, disc_train_loader, device, use_masked_input=masking
+        )
+        mu_yri = None
+        if target_train_loader is not None:
+            mu_yri, _ = extract_mu(
+                model, target_train_loader, device, use_masked_input=masking
+            )
+        latent_snapshots.append(
+            dict(epoch=epoch + 1, grl_lam=grl_lam,
+                 domain_loss=train_domain,
+                 mu_ceu=mu_ceu, mu_yri=mu_yri)
+        )
+
         if val_stop_metric < (best_val_stop_metric - min_delta):
             best_val_stop_metric = val_stop_metric
             best_epoch = epoch + 1
@@ -548,11 +567,27 @@ def main(
     )
 
     if use_grl:
+        lambda_loss_dict = {
+            "domain loss": (train_domain_loss_list, None, "loss_vs_lambda_domain"),
+            "recon loss (unmasked)": (train_recon_unmasked_list, val_recon_unmasked_list, "loss_vs_lambda_recon_unmasked"),
+            "KL loss": (train_kl_list, val_kl_list, "loss_vs_lambda_kl"),
+            "phenotype loss": (train_phenotype_loss_list, val_phenotype_loss_list, "loss_vs_lambda_phenotype"),
+        }
+        if masking:
+            lambda_loss_dict["recon loss (masked)"] = (
+                train_recon_masked_list, val_recon_masked_list, "loss_vs_lambda_recon_masked"
+            )
         plot_lambda_vs_loss(
             lambda_values=grl_lambda_list,
-            train_domain_losses=train_domain_loss_list,
+            loss_dict=lambda_loss_dict,
             output_dir=out,
         )
+
+    # ------------------------------------------------------------------
+    # latent activation movie
+    # ------------------------------------------------------------------
+    if latent_snapshots:
+        plot_latent_activation_movie(latent_snapshots, output_dir=out)
 
     # ------------------------------------------------------------------
     # reload best model

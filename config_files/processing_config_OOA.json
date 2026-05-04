@@ -1,0 +1,14 @@
+{
+  "discovery": "CEU",
+  "discovery_train_frac": 0.8,
+  "target_held_out_frac": 0.8,
+  "seed": 42,
+  "num_causal_variants": 200,
+  "heritability": 1.0,
+  "trait_distribution": "normal",
+  "trait_distribution_parameters": {
+    "mean": 0,
+    "std": 1
+  },
+  "maf_threshold": 0.005
+}

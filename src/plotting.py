@@ -589,23 +589,30 @@ def plot_loss_curves(
 # ------------------------------------------------------------------
 def plot_lambda_vs_loss(
     lambda_values,
-    train_domain_losses,
+    loss_dict,
     output_dir,
 ):
-    """Plot domain loss against GRL lambda value (training only)."""
+    """Plot each loss in loss_dict against GRL lambda value (one file per loss).
+
+    loss_dict: {label: (train_values, val_values_or_None, filename_stem)}
+    """
     _ensure_dir(output_dir)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(lambda_values, train_domain_losses, linewidth=1.5)
-    ax.set_xlabel("GRL λ")
-    ax.set_ylabel("domain loss")
-    ax.set_title(
-        "Domain loss vs GRL λ\n"
-        "(λ ramps from 0 → λ_max via Ganin et al. schedule)"
-    )
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/loss_vs_lambda.png", dpi=300)
-    plt.close()
+    for label, (train_values, val_values, fname) in loss_dict.items():
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(lambda_values, train_values, linewidth=1.5, label="train")
+        if val_values is not None:
+            ax.plot(lambda_values, val_values, linewidth=1.5, label="val", linestyle="--")
+            ax.legend()
+        ax.set_xlabel("GRL λ")
+        ax.set_ylabel(label)
+        ax.set_title(
+            f"{label} vs GRL λ\n"
+            "(λ ramps from 0 → λ_max via Ganin et al. schedule)"
+        )
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/{fname}.png", dpi=300)
+        plt.close()
 
 
 # ------------------------------------------------------------------
@@ -660,3 +667,203 @@ def plot_example_input_heatmap(
     plt.close()
 
     print(f"Saved masked-input heatmap plot to: {output_path}")
+
+
+# ------------------------------------------------------------------
+# latent activation movie (GRL degeneracy diagnostic)
+# ------------------------------------------------------------------
+def plot_mu_vs_domain_loss(snapshots, output_dir):
+    """Static PNG: mean |μ| vs domain loss across all epochs."""
+    if not snapshots:
+        return
+
+    _ensure_dir(output_dir)
+
+    epochs      = [s["epoch"]      for s in snapshots]
+    domain_loss = [s.get("domain_loss", float("nan")) for s in snapshots]
+    mean_abs_mu = [float(np.mean(np.abs(
+                       np.concatenate([s["mu_ceu"]] + ([s["mu_yri"]] if s.get("mu_yri") is not None else []))
+                   ))) for s in snapshots]
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sc = ax.scatter(domain_loss, mean_abs_mu, c=epochs, cmap="viridis", s=30, zorder=2)
+    ax.plot(domain_loss, mean_abs_mu, color="gray", linewidth=0.8, zorder=1)
+    cbar = fig.colorbar(sc, ax=ax)
+    cbar.set_label("epoch", fontsize=9)
+    ax.set_xlabel("domain loss", fontsize=10)
+    ax.set_ylabel("mean |μ|", fontsize=10)
+    ax.set_title("Mean |μ| vs domain loss (trajectory)", fontsize=11)
+    plt.tight_layout()
+    out_path = os.path.join(output_dir, "mu_vs_domain_loss.png")
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"Saved mean |μ| vs domain loss plot → {out_path}")
+
+
+def plot_latent_activation_movie(
+    snapshots,
+    output_dir,
+    fps=10,
+    max_per_pop=200,
+    save_frames=False,
+):
+    """Save a GIF with two stacked panels evolving epoch by epoch.
+
+    Panel 1 (top):    domain loss vs GRL lambda — full curve plotted once,
+                      red dot tracks the current epoch.
+    Panel 2 (bottom): μ activation heatmap — CEU (top) / YRI (bottom).
+
+    Also calls plot_mu_vs_domain_loss to save a companion static PNG.
+
+    snapshots: list of dicts with keys
+        epoch (int), grl_lam (float), domain_loss (float),
+        mu_ceu (np.ndarray), mu_yri (np.ndarray or None)
+    """
+    import matplotlib.animation as animation
+
+    if not snapshots:
+        return
+
+    _ensure_dir(output_dir)
+
+    # companion static plot
+    plot_mu_vs_domain_loss(snapshots, output_dir)
+
+    # ── per-frame data ──────────────────────────────────────────────────────
+    frames_data = []
+    for snap in snapshots:
+        mu_ceu = snap["mu_ceu"][:max_per_pop]
+        n_ceu  = len(mu_ceu)
+
+        if snap.get("mu_yri") is not None:
+            mu_yri = snap["mu_yri"][:max_per_pop]
+            mat    = np.concatenate([mu_ceu, mu_yri], axis=0)
+            n_yri  = len(mu_yri)
+        else:
+            mat, n_yri = mu_ceu, 0
+
+        frames_data.append(
+            dict(epoch=snap["epoch"],
+                 grl_lam=snap["grl_lam"],
+                 domain_loss=snap.get("domain_loss", float("nan")),
+                 mat=mat, n_ceu=n_ceu, n_yri=n_yri)
+        )
+
+    all_lam   = np.array([f["grl_lam"]    for f in frames_data])
+    all_dloss = np.array([f["domain_loss"] for f in frames_data])
+
+    # global symmetric colour scale for heatmap
+    all_vals = np.concatenate([f["mat"].ravel() for f in frames_data])
+    vmax = float(np.percentile(np.abs(all_vals), 99))
+    vmin = -vmax
+
+    n_ceu   = frames_data[0]["n_ceu"]
+    n_yri   = frames_data[0]["n_yri"]
+    n_total = n_ceu + n_yri
+
+    all_epochs = np.array([f["epoch"] for f in frames_data])
+
+    # ── figure: 2 rows ──────────────────────────────────────────────────────
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(12, 7),
+        gridspec_kw={"height_ratios": [2, 3]}
+    )
+    fig.subplots_adjust(top=0.93, hspace=0.35)
+
+    # panel 1 — domain loss + lambda vs epoch (dual y-axis)
+    ax_top.plot(all_epochs, all_dloss, color="steelblue", linewidth=1.5,
+                label="domain loss", zorder=1)
+    dot_top, = ax_top.plot(all_epochs[0], all_dloss[0], "o", color="red",
+                           markersize=8, zorder=3)
+    ax_top.set_xlabel("Epoch", fontsize=9)
+    ax_top.set_ylabel("domain loss", color="steelblue", fontsize=9)
+    ax_top.tick_params(axis="y", labelcolor="steelblue", labelsize=8)
+    ax_top.tick_params(axis="x", labelsize=8)
+
+    ax_lam = ax_top.twinx()
+    ax_lam.plot(all_epochs, all_lam, color="darkorange", linewidth=1.2,
+                linestyle="--", label="GRL λ", zorder=1)
+    dot_lam, = ax_lam.plot(all_epochs[0], all_lam[0], "o", color="red",
+                           markersize=8, zorder=3)
+    ax_lam.set_ylabel("GRL λ", color="darkorange", fontsize=9)
+    ax_lam.tick_params(axis="y", labelcolor="darkorange", labelsize=8)
+
+    lines = [
+        plt.Line2D([0], [0], color="steelblue", linewidth=1.5),
+        plt.Line2D([0], [0], color="darkorange", linewidth=1.2, linestyle="--"),
+    ]
+    ax_top.legend(lines, ["domain loss", "GRL λ"], fontsize=8, loc="upper left")
+    ax_top.set_title("Domain loss & GRL λ vs epoch", fontsize=10)
+
+    # panel 2 — μ heatmap
+    im = ax_bot.imshow(frames_data[0]["mat"], aspect="auto", cmap="RdBu_r",
+                       vmin=vmin, vmax=vmax, interpolation="nearest")
+    ax_bot.axhline(n_ceu - 0.5, color="black", linestyle="--", linewidth=1.0)
+    cbar = fig.colorbar(im, ax=ax_bot, fraction=0.02, pad=0.01)
+    cbar.set_label("activation", fontsize=9)
+    ax_bot.set_xlabel("Latent dimension (μ)", fontsize=9)
+    ax_bot.set_ylabel("Individual", fontsize=9)
+    ax_bot.tick_params(labelsize=8)
+
+    if n_total > 0:
+        ax_bot.text(-0.03, 1.0 - n_ceu / (2.0 * n_total),
+                    "CEU", transform=ax_bot.transAxes, va="center", ha="right",
+                    color="#1f77b4", fontsize=9, fontweight="bold")
+    if n_yri > 0:
+        ax_bot.text(-0.03, 1.0 - (n_ceu + n_yri * 0.5) / n_total,
+                    "YRI", transform=ax_bot.transAxes, va="center", ha="right",
+                    color="#ff7f0e", fontsize=9, fontweight="bold")
+
+    fd0 = frames_data[0]
+    sup = fig.suptitle(f"Epoch {fd0['epoch']}  λ={fd0['grl_lam']:.3f}", fontsize=11)
+
+    def update(i):
+        fd = frames_data[i]
+        im.set_data(fd["mat"])
+        dot_top.set_data([fd["epoch"]], [fd["domain_loss"]])
+        dot_lam.set_data([fd["epoch"]], [fd["grl_lam"]])
+        sup.set_text(f"Epoch {fd['epoch']}  λ={fd['grl_lam']:.3f}")
+        return im, dot_top, dot_lam, sup
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(frames_data), interval=1000 / fps, blit=False
+    )
+
+    gif_path = os.path.join(output_dir, "latent_activation_movie.gif")
+    print(f"Saving latent activation movie ({len(frames_data)} frames @ {fps} fps) → {gif_path}")
+    ani.save(gif_path, writer=animation.PillowWriter(fps=fps))
+    plt.close()
+    print(f"  Done — {os.path.getsize(gif_path) / 1e6:.1f} MB")
+
+    if save_frames:
+        frames_dir = os.path.join(output_dir, "latent_movie_frames")
+        os.makedirs(frames_dir, exist_ok=True)
+        for fd in frames_data:
+            fig2, (ax2_top, ax2_bot) = plt.subplots(
+                2, 1, figsize=(12, 7),
+                gridspec_kw={"height_ratios": [2, 3]}
+            )
+            fig2.subplots_adjust(top=0.93, hspace=0.35)
+
+            ax2_top.plot(all_epochs, all_dloss, color="steelblue", linewidth=1.5)
+            ax2_top.plot(fd["epoch"], fd["domain_loss"], "o", color="red", markersize=8)
+            ax2_top.set_xlabel("Epoch", fontsize=9)
+            ax2_top.set_ylabel("domain loss", color="steelblue", fontsize=9)
+            ax2_top.tick_params(axis="y", labelcolor="steelblue", labelsize=8)
+            ax2_lam = ax2_top.twinx()
+            ax2_lam.plot(all_epochs, all_lam, color="darkorange", linewidth=1.2, linestyle="--")
+            ax2_lam.plot(fd["epoch"], fd["grl_lam"], "o", color="red", markersize=8)
+            ax2_lam.set_ylabel("GRL λ", color="darkorange", fontsize=9)
+            ax2_lam.tick_params(axis="y", labelcolor="darkorange", labelsize=8)
+            ax2_top.set_title("Domain loss & GRL λ vs epoch", fontsize=10)
+
+            im2 = ax2_bot.imshow(fd["mat"], aspect="auto", cmap="RdBu_r",
+                                 vmin=vmin, vmax=vmax, interpolation="nearest")
+            ax2_bot.axhline(n_ceu - 0.5, color="black", linestyle="--", linewidth=1.0)
+            fig2.colorbar(im2, ax=ax2_bot, fraction=0.02, pad=0.01).set_label("activation", fontsize=9)
+            ax2_bot.set_xlabel("Latent dimension (μ)", fontsize=9)
+            ax2_bot.set_ylabel("Individual", fontsize=9)
+            fig2.suptitle(f"Epoch {fd['epoch']}  λ={fd['grl_lam']:.3f}", fontsize=11)
+            plt.savefig(os.path.join(frames_dir, f"epoch_{fd['epoch']:04d}.png"), dpi=100)
+            plt.close()
+        print(f"  Saved {len(frames_data)} PNG frames → {frames_dir}")
