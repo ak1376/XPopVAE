@@ -102,7 +102,7 @@ def run(use_grl, mu=MU, w_init=0.5, lr=0.1, freeze_disc=True):
     return np.array(w_hist), np.array(d_hist), np.array(loss_hist), np.array(acc_hist)
 
 
-def make_movie(w_hist, mu, label, filename, color):
+def make_movie(w_hist, d_hist, mu, label, filename, color):
     x_eval, y_eval = make_eval_data(mu)
     n      = len(w_hist)
     epochs = np.arange(1, n + 1)
@@ -114,17 +114,31 @@ def make_movie(w_hist, mu, label, filename, color):
     fig = plt.figure(figsize=(9, 8), constrained_layout=True)
     gs  = gridspec.GridSpec(2, 1, figure=fig, height_ratios=[1, 1.6])
     ax_w, ax_dist = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
-    fig.suptitle(f'{label}  (μ={mu}, d frozen=1)', fontsize=13, fontweight='bold')
+    disc_label = 'trainable d' if d_hist.std() > 1e-6 else f'd frozen={d_hist[0]:.1f}'
+    fig.suptitle(f'{label}  (μ={mu}, {disc_label})', fontsize=13, fontweight='bold')
 
-    ax_w.plot(epochs, w_hist, color='lightgray', lw=1.5, zorder=1)
-    ax_w.axhline(0, color='k', ls='--', lw=0.9, alpha=0.5, label='w=0')
-    w_trace, = ax_w.plot([], [], color=color, lw=2.2, zorder=2)
+    # w trace (left y-axis)
+    ax_w.plot(epochs, w_hist, color='lightgray', lw=1.2, zorder=1)
+    ax_w.axhline(0, color='k', ls='--', lw=0.9, alpha=0.4)
+    w_trace, = ax_w.plot([], [], color=color,    lw=2.2, zorder=2, label='w')
     w_dot,   = ax_w.plot([], [], 'o', color='red', ms=9, zorder=3)
     pad = max(abs(w_hist).max() * 0.12, 0.3)
     ax_w.set_xlim(0, n + 1); ax_w.set_ylim(w_hist.min() - pad, w_hist.max() + pad)
-    ax_w.set_xlabel('Epoch'); ax_w.set_ylabel('w')
-    ax_w.set_title('w over time  (red dot = current epoch)')
-    ax_w.legend(fontsize=9); ax_w.grid(True, alpha=0.25)
+    ax_w.set_ylabel('w', color=color); ax_w.tick_params(axis='y', labelcolor=color)
+    ax_w.set_xlabel('Epoch')
+
+    # d trace (right y-axis)
+    ax_d = ax_w.twinx()
+    ax_d.plot(epochs, d_hist, color='slategray', lw=1.2, ls=':', zorder=1)
+    d_trace, = ax_d.plot([], [], color='slategray', lw=2.0, ls='--', zorder=2, label='d')
+    d_pad = max(abs(d_hist).max() * 0.12, 0.3)
+    ax_d.set_ylim(d_hist.min() - d_pad, d_hist.max() + d_pad)
+    ax_d.set_ylabel('d', color='slategray'); ax_d.tick_params(axis='y', labelcolor='slategray')
+
+    lines = [w_trace, d_trace]
+    ax_w.legend(lines, ['w', 'd'], fontsize=9, loc='upper left')
+    ax_w.set_title('w and d over time  (red dot = current w)')
+    ax_w.grid(True, alpha=0.25)
 
     ax_dist.axvline(0, color='k', ls='--', lw=1.5, alpha=0.85, zorder=4,
                     label='Decision boundary z=0')
@@ -149,14 +163,16 @@ def make_movie(w_hist, mu, label, filename, color):
 
     def init():
         w_trace.set_data([], []); w_dot.set_data([], [])
+        d_trace.set_data([], [])
         src_line.set_data([], []); tgt_line.set_data([], [])
         status_box.set_text('')
-        return w_trace, w_dot, src_line, tgt_line, status_box
+        return w_trace, w_dot, d_trace, src_line, tgt_line, status_box
 
     def update(frame):
         w = w_hist[frame]
         w_trace.set_data(epochs[:frame + 1], w_hist[:frame + 1])
         w_dot.set_data([epochs[frame]], [w])
+        d_trace.set_data(epochs[:frame + 1], d_hist[:frame + 1])
         std_z   = max(abs(w) * SIGMA_X, 0.05)
         src_pdf = scipy_norm.pdf(z_range, loc=-w * mu / 2, scale=std_z)
         tgt_pdf = scipy_norm.pdf(z_range, loc= w * mu / 2, scale=std_z)
@@ -167,7 +183,7 @@ def make_movie(w_hist, mu, label, filename, color):
         elif w < -0.05: s = f'w={w:+.3f}  source RIGHT ✗ target LEFT ✗  acc={acc*100:.1f}%'
         else:           s = f'w={w:+.3f}  distributions overlap  acc≈50%'
         status_box.set_text(s)
-        return w_trace, w_dot, src_line, tgt_line, status_box
+        return w_trace, w_dot, d_trace, src_line, tgt_line, status_box
 
     animation.FuncAnimation(fig, update, frames=n, init_func=init,
                              interval=60, blit=False).save(
@@ -246,13 +262,14 @@ def main():
         print(f"  {label:25s}: w={w_h[-1]:+.4f}  d={d_h[-1]:+.4f}  loss={L_h[-1]:.4f}")
 
     movie_runs = [
-        ('No GRL  frozen d',    w_no,     'steelblue',      OUTPUT_DIR / 'no_grl.gif'),
-        ('GRL     frozen d',    w_grl,    'darkorange',     OUTPUT_DIR / 'grl.gif'),
-        ('GRL     trainable d', w_grl_td, 'crimson',        OUTPUT_DIR / 'grl_trainable_disc.gif'),
+        ('No GRL  frozen d',    w_no,     d_no,     'steelblue',       OUTPUT_DIR / 'no_grl_frozen_d.gif'),
+        ('GRL     frozen d',    w_grl,    d_grl,    'darkorange',      OUTPUT_DIR / 'grl_frozen_d.gif'),
+        ('No GRL  trainable d', w_no_td,  d_no_td,  'mediumseagreen',  OUTPUT_DIR / 'no_grl_trainable_d.gif'),
+        ('GRL     trainable d', w_grl_td, d_grl_td, 'crimson',         OUTPUT_DIR / 'grl_trainable_d.gif'),
     ]
-    for label, w_h, color, fname in movie_runs:
+    for label, w_h, d_h, color, fname in movie_runs:
         print(f"\nMaking movie: {fname} ({N_MOVIE} epochs) ...")
-        make_movie(w_h[:N_MOVIE], mu=MU, label=label, filename=fname, color=color)
+        make_movie(w_h[:N_MOVIE], d_h[:N_MOVIE], mu=MU, label=label, filename=fname, color=color)
 
     print("\nDone.")
 
