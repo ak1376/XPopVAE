@@ -28,9 +28,10 @@ from scipy.stats import norm as scipy_norm
 
 MU       = 2.0
 SIGMA_X  = 0.5
-N_EPOCHS = 300
-N_MOVIE  = 150
-N_EVAL   = 4000
+N_EPOCHS = 500
+N_MOVIE  = 100
+N_EVAL      = 4000
+ALPHA_TASK  = 0.6   # weight on task loss; set to 0.0 to disable
 
 # All outputs from this script are saved here.
 # This folder will be created automatically next to wherever you run the script.
@@ -39,26 +40,31 @@ OUTPUT_DIR = Path("grl_sanity_outputs")
 
 class GRL(torch.autograd.Function):
     @staticmethod
-    def forward(_ctx, x):
+    def forward(ctx, x, lam):
+        ctx.lam = lam
         return x.view_as(x)
 
     @staticmethod
-    def backward(_ctx, grad):
-        return -grad
+    def backward(ctx, grad):
+        return -ctx.lam * grad, None
 
 
 class ToyModel(nn.Module):
     def __init__(self, w_init=0.5, d_init=1.0, freeze_disc=True):
         super().__init__()
-        self.w    = nn.Parameter(torch.tensor([[w_init]]))
-        self.disc = nn.Linear(1, 1, bias=False)
+        self.w         = nn.Parameter(torch.tensor([[w_init]]))
+        self.task_head = nn.Linear(1, 1, bias=False)
+        nn.init.constant_(self.task_head.weight, 1.0)
+        self.disc      = nn.Linear(1, 1, bias=False)
         self.disc.weight.data.fill_(d_init)
         self.disc.weight.requires_grad = not freeze_disc
 
-    def forward(self, x, use_grl):
-        z = self.w * x
-        z = GRL.apply(z) if use_grl else z
-        return self.disc(z)
+    def forward(self, x, use_grl, lam=1.0):
+        z            = self.w * x
+        task_pred    = self.task_head(z)           # straight gradient — no GRL
+        z_dom        = GRL.apply(z, lam) if use_grl else z
+        domain_logit = self.disc(z_dom)
+        return domain_logit, task_pred
 
 
 def make_eval_data(mu):
@@ -75,34 +81,43 @@ def acc_empirical(w_val, x_eval, y_eval):
     return (preds == y_eval).mean()
 
 
-def run(use_grl, mu=MU, w_init=0.5, lr=0.1, freeze_disc=True):
+def run(use_grl, mu=MU, w_init=0.5, lr=0.1, freeze_disc=True, alpha_task=ALPHA_TASK):
     model     = ToyModel(w_init=w_init, freeze_disc=freeze_disc)
-    params    = [model.w] if freeze_disc else list(model.parameters())
+    params    = ([model.w, model.task_head.weight]
+                 if freeze_disc else list(model.parameters()))
     optimizer = optim.SGD(params, lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
+    bce       = nn.BCEWithLogitsLoss()
+    mse       = nn.MSELoss()
 
     x      = torch.tensor([[-mu / 2], [mu / 2]])
     labels = torch.tensor([[0.0],     [1.0]])
 
     x_eval, y_eval = make_eval_data(mu)
 
-    w_hist, d_hist, loss_hist, acc_hist = [], [], [], []
-    for _ in range(N_EPOCHS):
-        logits = model(x, use_grl=use_grl)
-        loss   = criterion(logits, labels)
+    w_hist, d_hist, domain_loss_hist, task_loss_hist, acc_hist, lam_hist = [], [], [], [], [], []
+    for epoch in range(N_EPOCHS):
+        lam = 2.0 / (1.0 + np.exp(-10.0 * epoch / N_EPOCHS)) - 1.0
+        domain_logit, task_pred = model(x, use_grl=use_grl, lam=lam)
+        domain_loss = bce(domain_logit, labels)
+        task_loss   = mse(task_pred, x) if alpha_task > 0 else torch.tensor(0.0)
+        loss        = domain_loss + alpha_task * task_loss
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         w_val = model.w.item()
         w_hist.append(w_val)
         d_hist.append(model.disc.weight.item())
-        loss_hist.append(loss.item())
+        domain_loss_hist.append(domain_loss.item())
+        task_loss_hist.append(task_loss.item())
         acc_hist.append(acc_empirical(w_val, x_eval, y_eval))
+        lam_hist.append(lam)
 
-    return np.array(w_hist), np.array(d_hist), np.array(loss_hist), np.array(acc_hist)
+    return (np.array(w_hist), np.array(d_hist),
+            np.array(domain_loss_hist), np.array(task_loss_hist),
+            np.array(acc_hist), np.array(lam_hist))
 
 
-def make_movie(w_hist, d_hist, mu, label, filename, color):
+def make_movie(w_hist, d_hist, lam_hist, mu, label, filename, color):
     x_eval, y_eval = make_eval_data(mu)
     n      = len(w_hist)
     epochs = np.arange(1, n + 1)
@@ -135,8 +150,17 @@ def make_movie(w_hist, d_hist, mu, label, filename, color):
     ax_d.set_ylim(d_hist.min() - d_pad, d_hist.max() + d_pad)
     ax_d.set_ylabel('d', color='slategray'); ax_d.tick_params(axis='y', labelcolor='slategray')
 
-    lines = [w_trace, d_trace]
-    ax_w.legend(lines, ['w', 'd'], fontsize=9, loc='upper left')
+    # λ schedule (right axis, offset outward so it doesn't collide with d)
+    ax_lam = ax_w.twinx()
+    ax_lam.spines['right'].set_position(('outward', 55))
+    ax_lam.plot(epochs, lam_hist, color='purple', lw=1.0, ls=':', alpha=0.4, zorder=1)
+    lam_trace, = ax_lam.plot([], [], color='purple', lw=1.5, ls=':', zorder=2, label='λ')
+    ax_lam.set_ylim(-0.05, 1.15)
+    ax_lam.set_ylabel('λ', color='purple')
+    ax_lam.tick_params(axis='y', labelcolor='purple')
+
+    lines = [w_trace, d_trace, lam_trace]
+    ax_w.legend(lines, ['w', 'd', 'λ'], fontsize=9, loc='upper left')
     ax_w.set_title('w and d over time  (red dot = current w)')
     ax_w.grid(True, alpha=0.25)
 
@@ -163,16 +187,17 @@ def make_movie(w_hist, d_hist, mu, label, filename, color):
 
     def init():
         w_trace.set_data([], []); w_dot.set_data([], [])
-        d_trace.set_data([], [])
+        d_trace.set_data([], []); lam_trace.set_data([], [])
         src_line.set_data([], []); tgt_line.set_data([], [])
         status_box.set_text('')
-        return w_trace, w_dot, d_trace, src_line, tgt_line, status_box
+        return w_trace, w_dot, d_trace, lam_trace, src_line, tgt_line, status_box
 
     def update(frame):
         w = w_hist[frame]
         w_trace.set_data(epochs[:frame + 1], w_hist[:frame + 1])
         w_dot.set_data([epochs[frame]], [w])
         d_trace.set_data(epochs[:frame + 1], d_hist[:frame + 1])
+        lam_trace.set_data(epochs[:frame + 1], lam_hist[:frame + 1])
         std_z   = max(abs(w) * SIGMA_X, 0.05)
         src_pdf = scipy_norm.pdf(z_range, loc=-w * mu / 2, scale=std_z)
         tgt_pdf = scipy_norm.pdf(z_range, loc= w * mu / 2, scale=std_z)
@@ -183,7 +208,7 @@ def make_movie(w_hist, d_hist, mu, label, filename, color):
         elif w < -0.05: s = f'w={w:+.3f}  source RIGHT ✗ target LEFT ✗  acc={acc*100:.1f}%'
         else:           s = f'w={w:+.3f}  distributions overlap  acc≈50%'
         status_box.set_text(s)
-        return w_trace, w_dot, d_trace, src_line, tgt_line, status_box
+        return w_trace, w_dot, d_trace, lam_trace, src_line, tgt_line, status_box
 
     animation.FuncAnimation(fig, update, frames=n, init_func=init,
                              interval=60, blit=False).save(
@@ -199,39 +224,40 @@ def main():
     print(f"Saving outputs to: {OUTPUT_DIR.resolve()}")
 
     print("Running No GRL (frozen disc) ...")
-    w_no,  d_no,  L_no,  _ = run(use_grl=False, freeze_disc=True)
+    w_no,     d_no,     DL_no,     TL_no,     _, lam_no     = run(use_grl=False, freeze_disc=True)
 
     print("Running GRL (frozen disc) ...")
-    w_grl, d_grl, L_grl, _ = run(use_grl=True,  freeze_disc=True)
+    w_grl,    d_grl,    DL_grl,    TL_grl,    _, lam_grl    = run(use_grl=True,  freeze_disc=True)
 
     print("Running No GRL (trainable disc) ...")
-    w_no_td,  d_no_td,  L_no_td,  _ = run(use_grl=False, freeze_disc=False)
+    w_no_td,  d_no_td,  DL_no_td,  TL_no_td,  _, lam_no_td  = run(use_grl=False, freeze_disc=False)
 
     print("Running GRL (trainable disc) ...")
-    w_grl_td, d_grl_td, L_grl_td, _ = run(use_grl=True,  freeze_disc=False)
+    w_grl_td, d_grl_td, DL_grl_td, TL_grl_td, _, lam_grl_td = run(use_grl=True,  freeze_disc=False)
 
     runs = [
-        ('No GRL  frozen d',    'steelblue',  w_no,     d_no,     L_no),
-        ('GRL     frozen d',    'darkorange', w_grl,    d_grl,    L_grl),
-        ('No GRL  trainable d', 'mediumseagreen', w_no_td, d_no_td, L_no_td),
-        ('GRL     trainable d', 'crimson',    w_grl_td, d_grl_td, L_grl_td),
+        ('No GRL  frozen d',    'steelblue',       w_no,     d_no,     DL_no,     TL_no),
+        ('GRL     frozen d',    'darkorange',      w_grl,    d_grl,    DL_grl,    TL_grl),
+        ('No GRL  trainable d', 'mediumseagreen',  w_no_td,  d_no_td,  DL_no_td,  TL_no_td),
+        ('GRL     trainable d', 'crimson',         w_grl_td, d_grl_td, DL_grl_td, TL_grl_td),
     ]
 
     curves_path = OUTPUT_DIR / 'training_curves.npz'
     np.savez(
         curves_path,
-        w_no=w_no, d_no=d_no, L_no=L_no,
-        w_grl=w_grl, d_grl=d_grl, L_grl=L_grl,
-        w_no_td=w_no_td, d_no_td=d_no_td, L_no_td=L_no_td,
-        w_grl_td=w_grl_td, d_grl_td=d_grl_td, L_grl_td=L_grl_td,
+        w_no=w_no,       d_no=d_no,       DL_no=DL_no,       TL_no=TL_no,
+        w_grl=w_grl,     d_grl=d_grl,     DL_grl=DL_grl,     TL_grl=TL_grl,
+        w_no_td=w_no_td, d_no_td=d_no_td, DL_no_td=DL_no_td, TL_no_td=TL_no_td,
+        w_grl_td=w_grl_td, d_grl_td=d_grl_td, DL_grl_td=DL_grl_td, TL_grl_td=TL_grl_td,
     )
     print(f"Saved → {curves_path}")
 
-    fig, axes = plt.subplots(3, len(runs), figsize=(5 * len(runs), 11), sharex=True)
-    fig.suptitle(f'GRL sanity check  (μ={MU}, σ_x={SIGMA_X})',
-                 fontsize=12, fontweight='bold')
+    fig, axes = plt.subplots(4, len(runs), figsize=(5 * len(runs), 14), sharex=True)
+    fig.suptitle(
+        f'GRL sanity check  (μ={MU}, σ_x={SIGMA_X}, α_task={ALPHA_TASK})',
+        fontsize=12, fontweight='bold')
 
-    for col, (label, color, w_h, d_h, L_h) in enumerate(runs):
+    for col, (label, color, w_h, d_h, DL_h, TL_h) in enumerate(runs):
         axes[0, col].plot(epochs, w_h, color=color, lw=2)
         axes[0, col].axhline(0, color='k', ls='--', lw=0.8, alpha=0.5)
         axes[0, col].set_title(label, fontsize=10, fontweight='bold')
@@ -242,34 +268,34 @@ def main():
         axes[1, col].set_ylabel('d'); axes[1, col].grid(True, alpha=0.25)
         axes[1, col].legend(fontsize=8)
 
-        axes[2, col].plot(epochs, L_h, color=color, lw=2)
+        axes[2, col].plot(epochs, DL_h, color=color, lw=2)
         axes[2, col].axhline(np.log(2), color='k', ls='--', lw=0.8, alpha=0.5,
                               label=f'log(2)≈{np.log(2):.3f}')
-        axes[2, col].set_ylabel('Domain loss'); axes[2, col].set_xlabel('Epoch')
-        axes[2, col].grid(True, alpha=0.25); axes[2, col].legend(fontsize=8)
+        axes[2, col].set_ylabel('Domain loss'); axes[2, col].grid(True, alpha=0.25)
+        axes[2, col].legend(fontsize=8)
+
+        axes[3, col].plot(epochs, TL_h, color=color, lw=2)
+        axes[3, col].set_ylabel('Task loss (MSE)'); axes[3, col].set_xlabel('Epoch')
+        axes[3, col].grid(True, alpha=0.25)
 
     plt.tight_layout()
     summary_path = OUTPUT_DIR / 'sanity_grl.png'
     plt.savefig(summary_path, dpi=150)
     print(f"Saved → {summary_path}")
 
-    for label, w_h, d_h, L_h in [
-        ('No GRL  frozen d',    w_no,     d_no,     L_no),
-        ('GRL     frozen d',    w_grl,    d_grl,    L_grl),
-        ('No GRL  trainable d', w_no_td,  d_no_td,  L_no_td),
-        ('GRL     trainable d', w_grl_td, d_grl_td, L_grl_td),
-    ]:
-        print(f"  {label:25s}: w={w_h[-1]:+.4f}  d={d_h[-1]:+.4f}  loss={L_h[-1]:.4f}")
+    for label, color, w_h, d_h, DL_h, TL_h in runs:
+        print(f"  {label:25s}: w={w_h[-1]:+.4f}  d={d_h[-1]:+.4f}"
+              f"  domain_loss={DL_h[-1]:.4f}  task_loss={TL_h[-1]:.4f}")
 
     movie_runs = [
-        ('No GRL  frozen d',    w_no,     d_no,     'steelblue',       OUTPUT_DIR / 'no_grl_frozen_d.gif'),
-        ('GRL     frozen d',    w_grl,    d_grl,    'darkorange',      OUTPUT_DIR / 'grl_frozen_d.gif'),
-        ('No GRL  trainable d', w_no_td,  d_no_td,  'mediumseagreen',  OUTPUT_DIR / 'no_grl_trainable_d.gif'),
-        ('GRL     trainable d', w_grl_td, d_grl_td, 'crimson',         OUTPUT_DIR / 'grl_trainable_d.gif'),
+        ('No GRL  frozen d',    w_no,     d_no,     lam_no,     'steelblue',       OUTPUT_DIR / 'no_grl_frozen_d.gif'),
+        ('GRL     frozen d',    w_grl,    d_grl,    lam_grl,    'darkorange',      OUTPUT_DIR / 'grl_frozen_d.gif'),
+        ('No GRL  trainable d', w_no_td,  d_no_td,  lam_no_td,  'mediumseagreen',  OUTPUT_DIR / 'no_grl_trainable_d.gif'),
+        ('GRL     trainable d', w_grl_td, d_grl_td, lam_grl_td, 'crimson',         OUTPUT_DIR / 'grl_trainable_d.gif'),
     ]
-    for label, w_h, d_h, color, fname in movie_runs:
+    for label, w_h, d_h, lam_h, color, fname in movie_runs:
         print(f"\nMaking movie: {fname} ({N_MOVIE} epochs) ...")
-        make_movie(w_h[:N_MOVIE], d_h[:N_MOVIE], mu=MU, label=label, filename=fname, color=color)
+        make_movie(w_h[:N_MOVIE], d_h[:N_MOVIE], lam_h[:N_MOVIE], mu=MU, label=label, filename=fname, color=color)
 
     print("\nDone.")
 
