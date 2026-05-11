@@ -96,11 +96,12 @@ class Predictor(nn.Module):
 # ---------------------------------------------------------------------------
 # Data generation
 # ---------------------------------------------------------------------------
+# x is 2D: x[:,0] is task-relevant, x[:,1] is domain noise
 def make_split(mu, n, std=0.5, noise_std=0.2, rng=None):
-    if rng is None:
-        rng = np.random.default_rng()
-    x = rng.normal(mu, std, (n, 1)).astype(np.float32)
-    y = (x ** 2 + noise_std * rng.standard_normal(x.shape)).astype(np.float32)
+    x_task    = rng.normal(0,   std, (n, 1)).astype(np.float32)   # same in both domains
+    x_nuisance = rng.normal(mu, 1.0, (n, 1)).astype(np.float32)   # shifts with domain
+    x = np.concatenate([x_task, x_nuisance], axis=1)
+    y = (x_task ** 2 + noise_std * rng.standard_normal((n, 1))).astype(np.float32)
     return torch.from_numpy(x), torch.from_numpy(y)
 
 
@@ -113,7 +114,7 @@ def main():
 
     n_train    = 200
     n_val      = 100
-    n_epochs   = 5000
+    n_epochs   = 1000
     log_every  = 50
     snap_every = 50
     lr         = 3e-3
@@ -126,8 +127,17 @@ def main():
     tgt_x_train, _           = make_split( 5.0, n_train, rng=rng)   # unlabeled
     tgt_x_test,  tgt_y_test  = make_split( 5.0, n_val,   rng=rng)
 
-    # Normalize y by source training statistics so task loss stays O(1)
-    # regardless of domain gap size. Apply same transform to all splits.
+    # Standardize inputs using source train statistics so task and nuisance
+    # dimensions are on the same scale — prevents the encoder from ignoring
+    # x_task because x_nuisance dominates by raw magnitude.
+    x_mean = src_x_train.mean(dim=0, keepdim=True)
+    x_std  = src_x_train.std(dim=0,  keepdim=True).clamp(min=1e-6)
+    src_x_train = (src_x_train - x_mean) / x_std
+    src_x_val   = (src_x_val   - x_mean) / x_std
+    tgt_x_train = (tgt_x_train - x_mean) / x_std
+    tgt_x_test  = (tgt_x_test  - x_mean) / x_std
+
+    # Normalize y by source training statistics so task loss stays O(1).
     y_mean = src_y_train.mean()
     y_std  = src_y_train.std().clamp(min=1e-6)
     src_y_train = (src_y_train - y_mean) / y_std
@@ -135,7 +145,7 @@ def main():
     tgt_y_test  = (tgt_y_test  - y_mean) / y_std
 
     # --- models ---
-    encoder   = Encoder(latent_dim=latent_dim)
+    encoder   = Encoder(input_dim=2, latent_dim=latent_dim)
     predictor = Predictor(latent_dim=latent_dim)
     optimizer = torch.optim.Adam(
         list(encoder.parameters()) + list(predictor.parameters()), lr=lr
