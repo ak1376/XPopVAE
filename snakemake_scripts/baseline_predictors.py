@@ -175,7 +175,6 @@ def parse_args():
         help="True heritability (used to center gBLUP lambda search range)",
     )
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--standardize", action="store_true")
     p.add_argument(
         "--n_jobs",
         type=int,
@@ -206,15 +205,20 @@ def main():
     y_test = np.load(args.y_test)
     print(f"  Train {X_train.shape}  Val {X_val.shape}  Test {X_test.shape}")
 
-    if args.standardize:
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_val = scaler.transform(X_val)
-        X_test = scaler.transform(X_test)
-        print("  SNPs standardized.")
+    # Keep raw arrays for gBLUP (it normalizes via VanRaden GRM internally).
+    # LR is scale-invariant so raw arrays are fine there too.
+    X_train_raw, X_val_raw, X_test_raw = X_train, X_val, X_test
 
-    # train+val combined for Lasso CV
-    X_tv = np.concatenate([X_train, X_val])
+    # Ridge and Lasso always get standardized features — the penalty alpha has
+    # a consistent meaning only when all features are on the same scale.
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_val_s   = scaler.transform(X_val)
+    X_test_s  = scaler.transform(X_test)
+    print("  SNPs standardized for Ridge / Lasso.")
+
+    # train+val combined for Lasso CV (standardized)
+    X_tv = np.concatenate([X_train_s, X_val_s])
     y_tv = np.concatenate([y_train, y_val])
 
     out_dir = Path(args.out_dir)
@@ -230,7 +234,7 @@ def main():
         f"SNPs     : {X_train.shape[1]}",
         f"h2       : {args.h2}",
         f"Seed     : {args.seed}",
-        f"Std      : {args.standardize}",
+        f"Std      : always (Ridge/Lasso); raw (LR/gBLUP)",
         "",
     ]
 
@@ -251,52 +255,52 @@ def main():
         log()
 
     # -------------------------------------------------------------------------
-    # 1. Linear Regression
+    # 1. Linear Regression  (raw X — OLS is scale-invariant)
     # -------------------------------------------------------------------------
     log("Fitting Linear Regression...")
-    lr = LinearRegression().fit(X_train, y_train)
+    lr = LinearRegression().fit(X_train_raw, y_train)
     report(
         "Linear Regression",
-        evaluate(y_val, lr.predict(X_val)),
-        evaluate(y_test, lr.predict(X_test)),
+        evaluate(y_val, lr.predict(X_val_raw)),
+        evaluate(y_test, lr.predict(X_test_raw)),
     )
     plot_scatter(
         y_val,
-        lr.predict(X_val),
+        lr.predict(X_val_raw),
         y_test,
-        lr.predict(X_test),
+        lr.predict(X_test_raw),
         "Linear Regression",
         out_dir,
     )
 
     # -------------------------------------------------------------------------
-    # 2. Ridge
+    # 2. Ridge  (standardized X)
     # -------------------------------------------------------------------------
     log("Fitting Ridge Regression...")
     best_r2, best_a = -np.inf, 1.0
     for a in np.logspace(-3, 6, 80):
-        r2 = r2_score(y_val, Ridge(alpha=a).fit(X_train, y_train).predict(X_val))
+        r2 = r2_score(y_val, Ridge(alpha=a).fit(X_train_s, y_train).predict(X_val_s))
         if r2 > best_r2:
             best_r2, best_a = r2, a
 
-    ridge = Ridge(alpha=best_a).fit(X_train, y_train)
+    ridge = Ridge(alpha=best_a).fit(X_train_s, y_train)
     report(
         "Ridge Regression",
-        evaluate(y_val, ridge.predict(X_val)),
-        evaluate(y_test, ridge.predict(X_test)),
+        evaluate(y_val, ridge.predict(X_val_s)),
+        evaluate(y_test, ridge.predict(X_test_s)),
         extra=f"Best alpha={best_a:.4g}",
     )
     plot_scatter(
         y_val,
-        ridge.predict(X_val),
+        ridge.predict(X_val_s),
         y_test,
-        ridge.predict(X_test),
+        ridge.predict(X_test_s),
         "Ridge Regression",
         out_dir,
     )
 
     # -------------------------------------------------------------------------
-    # 3. Lasso via LassoLarsCV
+    # 3. Lasso via LassoLarsCV  (standardized X)
     # -------------------------------------------------------------------------
     log("Fitting Lasso via LassoLarsCV...")
     llcv = LassoLarsCV(
@@ -306,37 +310,37 @@ def main():
     ).fit(X_tv, y_tv)
 
     # refit on train only with CV-chosen alpha for fair val evaluation
-    lasso = LassoLars(alpha=llcv.alpha_).fit(X_train, y_train)
+    lasso = LassoLars(alpha=llcv.alpha_).fit(X_train_s, y_train)
     n_nz = int(np.sum(lasso.coef_ != 0))
     report(
         "Lasso (LassoLarsCV)",
-        evaluate(y_val, lasso.predict(X_val)),
-        evaluate(y_test, lasso.predict(X_test)),
+        evaluate(y_val, lasso.predict(X_val_s)),
+        evaluate(y_test, lasso.predict(X_test_s)),
         extra=f"CV alpha={llcv.alpha_:.4g}, non-zero coefs={n_nz}",
     )
     plot_scatter(
         y_val,
-        lasso.predict(X_val),
+        lasso.predict(X_val_s),
         y_test,
-        lasso.predict(X_test),
+        lasso.predict(X_test_s),
         "Lasso LassoLarsCV",
         out_dir,
     )
 
     # -------------------------------------------------------------------------
-    # 4. gBLUP — lambda always CV-selected, h2 only centers the search range
+    # 4. gBLUP  (raw X — VanRaden GRM normalizes internally)
     # -------------------------------------------------------------------------
     log("Fitting gBLUP (CV lambda)...")
     gblup = GBLUPPredictor(h2=args.h2)
-    gblup.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+    gblup.fit(X_train_raw, y_train, X_val=X_val_raw, y_val=y_val)
     report(
         "gBLUP",
-        evaluate(y_val, gblup.predict(X_val)),
-        evaluate(y_test, gblup.predict(X_test)),
+        evaluate(y_val, gblup.predict(X_val_raw)),
+        evaluate(y_test, gblup.predict(X_test_raw)),
         extra=f"CV lambda={gblup.lambda_:.4g}  (h2={args.h2})",
     )
     plot_scatter(
-        y_val, gblup.predict(X_val), y_test, gblup.predict(X_test), "gBLUP", out_dir
+        y_val, gblup.predict(X_val_raw), y_test, gblup.predict(X_test_raw), "gBLUP", out_dir
     )
 
     # -------------------------------------------------------------------------
@@ -346,10 +350,10 @@ def main():
     log("SUMMARY — generalisation gap (Val R2 - Test R2)")
     log("=" * 60)
     rows = [
-        ("Linear Regression", lr.predict(X_val), lr.predict(X_test)),
-        ("Ridge Regression", ridge.predict(X_val), ridge.predict(X_test)),
-        ("Lasso (LassoLarsCV)", lasso.predict(X_val), lasso.predict(X_test)),
-        ("gBLUP", gblup.predict(X_val), gblup.predict(X_test)),
+        ("Linear Regression", lr.predict(X_val_raw),   lr.predict(X_test_raw)),
+        ("Ridge Regression",  ridge.predict(X_val_s),  ridge.predict(X_test_s)),
+        ("Lasso (LassoLarsCV)", lasso.predict(X_val_s), lasso.predict(X_test_s)),
+        ("gBLUP",             gblup.predict(X_val_raw), gblup.predict(X_test_raw)),
     ]
     log(f"  {'Model':<24}  {'Val R2':>8}  {'Test R2':>8}  {'Gap':>8}")
     log(f"  {'-'*24}  {'-'*8}  {'-'*8}  {'-'*8}")

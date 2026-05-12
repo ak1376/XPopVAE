@@ -42,30 +42,35 @@ class ConvVAE(nn.Module):
     """
     Convolutional VAE with a split latent space for domain adaptation.
 
-    The latent vector mu (shape: latent_dim) is partitioned into two halves:
+    The latent vector mu (shape: latent_dim) is partitioned into two parts:
 
-        mu = [ z_shared (shared_dim) | z_pop (latent_dim - shared_dim) ]
+        mu = [ z_task (task_dim) | z_domain (latent_dim - task_dim) ]
 
-        z_shared: domain-invariant subspace.
-                  Used by the phenotype head and the GRL domain classifier.
-                  The GRL pushes z_shared to be indistinguishable across domains,
-                  so phenotype prediction is forced to rely only on features
-                  that generalise across populations.
+        z_task:   task-relevant subspace.
+                  Used by the phenotype head, MMD alignment, and optionally
+                  an adversarial GRL classifier.
 
-        z_pop:    population-specific subspace.
-                  Free to encode LD structure, allele frequency differences,
-                  and other population-specific signals needed for reconstruction.
-                  Not seen by the phenotype head or the GRL.
+        z_domain: domain-specific subspace.
+                  Optionally used by a cooperative domain classifier (no
+                  gradient reversal) that pulls ancestry info INTO z_domain.
 
-        decoder:  receives the full z (reparameterized from the full mu/logvar),
-                  so reconstruction can use both subspaces.
+        decoder:  receives the full reparameterized z so reconstruction
+                  leverages both subspaces.
+
+    Domain adaptation flags (all independent, any combination works):
+        use_grl=True        adversarial GRL classifier on z_task
+        use_domain_clf=True cooperative classifier on z_domain (no reversal)
+        use_mmd             handled in train.py, not in the model
+
+    Forward returns a 7-tuple:
+        out, mu, logvar, z, pheno_pred, grl_logits, domain_logits
+        grl_logits    is None when use_grl=False
+        domain_logits is None when use_domain_clf=False
 
     Parameters
     ----------
-    shared_dim : int or None
-        Number of dimensions in z_shared. Defaults to latent_dim // 2.
-        Must be <= latent_dim. Set to latent_dim to recover the original
-        (unsplit) behaviour.
+    task_dim : int or None
+        Dimensions in z_task. Defaults to latent_dim // 2.
     """
 
     def __init__(
@@ -82,12 +87,16 @@ class ConvVAE(nn.Module):
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=None,
-        # --- domain adaptation ---
+        # --- split latent space ---
+        task_dim: int = None,
+        # --- adversarial GRL on z_task ---
         use_grl: bool = False,
         grl_hidden_dim: int = 256,
+        # --- cooperative domain clf on z_domain ---
+        use_domain_clf: bool = False,
+        domain_clf_hidden_dim: int = 256,
+        # --- shared ---
         num_domains: int = 2,
-        # --- split latent space ---
-        shared_dim: int = None,
     ):
         super().__init__()
 
@@ -104,11 +113,11 @@ class ConvVAE(nn.Module):
         self.use_grl = use_grl
         self.encoder_lengths = [input_length]
 
-        # shared_dim defaults to half the latent space
-        self.shared_dim = shared_dim if shared_dim is not None else latent_dim // 2
-        assert (
-            self.shared_dim <= latent_dim
-        ), f"shared_dim ({self.shared_dim}) must be <= latent_dim ({latent_dim})"
+        self.task_dim = task_dim if task_dim is not None else latent_dim // 2
+        assert self.task_dim <= latent_dim, (
+            f"task_dim ({self.task_dim}) must be <= latent_dim ({latent_dim})"
+        )
+        domain_dim = latent_dim - self.task_dim
 
         # ------------------------------------------------------------------
         # Encoder
@@ -147,36 +156,53 @@ class ConvVAE(nn.Module):
         self.fc_decode = nn.Linear(latent_dim, self.flat_dim)
 
         # ------------------------------------------------------------------
-        # Phenotype head  (z_shared only)
+        # Phenotype head  (z_task only)
         # ------------------------------------------------------------------
         if pheno_hidden_dim is None:
-            self.pheno_head = nn.Linear(self.shared_dim, pheno_dim)
+            self.pheno_head = nn.Linear(self.task_dim, pheno_dim)
         else:
             self.pheno_head = nn.Sequential(
-                nn.Linear(self.shared_dim, pheno_hidden_dim),
+                nn.Linear(self.task_dim, pheno_hidden_dim),
                 self._get_activation(),
                 nn.Linear(pheno_hidden_dim, pheno_dim),
             )
 
         # ------------------------------------------------------------------
-        # Domain classifier (z_shared only, through GRL)
+        # Adversarial GRL domain classifier (z_task only)
+        # Reversed gradients push z_task to be domain-invariant.
         # ------------------------------------------------------------------
         if use_grl:
             self.grl = GradientReversalLayer(lambda_=1.0)
             if grl_hidden_dim is None:
-                self.domain_classifier = nn.Linear(self.shared_dim, num_domains)
+                self.grl_classifier = nn.Linear(self.task_dim, num_domains)
             else:
-                self.domain_classifier = nn.Sequential(
-                    nn.Linear(self.shared_dim, grl_hidden_dim),
+                self.grl_classifier = nn.Sequential(
+                    nn.Linear(self.task_dim, grl_hidden_dim),
                     self._get_activation(),
                     nn.Linear(grl_hidden_dim, num_domains),
                 )
         else:
             self.grl = None
+            self.grl_classifier = None
+
+        # ------------------------------------------------------------------
+        # Cooperative domain classifier (z_domain only, no gradient reversal)
+        # Normal gradients pull ancestry information INTO z_domain.
+        # ------------------------------------------------------------------
+        if use_domain_clf and domain_dim > 0:
+            if domain_clf_hidden_dim is None:
+                self.domain_classifier = nn.Linear(domain_dim, num_domains)
+            else:
+                self.domain_classifier = nn.Sequential(
+                    nn.Linear(domain_dim, domain_clf_hidden_dim),
+                    self._get_activation(),
+                    nn.Linear(domain_clf_hidden_dim, num_domains),
+                )
+        else:
             self.domain_classifier = None
 
         # ------------------------------------------------------------------
-        # Decoder  (full z — unchanged)
+        # Decoder  (full z — uses both z_task and z_domain)
         # ------------------------------------------------------------------
         dec_layers = []
         decoder_channels = list(reversed(hidden_channels))
@@ -244,26 +270,20 @@ class ConvVAE(nn.Module):
         return mu + eps * std
 
     def set_grl_lambda(self, lambda_: float):
-        """Update the GRL reversal strength. Call this each epoch from the training loop."""
+        """Update the GRL reversal strength. Call each epoch from the training loop."""
         if self.grl is not None:
             self.grl.set_lambda(lambda_)
 
     def latent_stats(self, mu: torch.Tensor) -> dict:
-        """
-        Returns variance diagnostics for the two latent subspaces.
-        Log these each epoch to check that z_pop doesn't collapse.
-
-        Usage in training loop:
-            stats = model.latent_stats(mu)
-            log('z_shared_var', stats['z_shared_var'])
-            log('z_pop_var',    stats['z_pop_var'])
-        """
-        z_shared = mu[:, : self.shared_dim]
-        z_pop = mu[:, self.shared_dim :]
-        z_pop_var = z_pop.var(dim=0).mean().item() if z_pop.shape[1] > 0 else None
+        """Variance diagnostics for the two latent subspaces."""
+        z_task = mu[:, : self.task_dim]
+        z_domain = mu[:, self.task_dim :]
+        z_domain_var = (
+            z_domain.var(dim=0).mean().item() if z_domain.shape[1] > 0 else None
+        )
         return {
-            "z_shared_var": z_shared.var(dim=0).mean().item(),
-            "z_pop_var": z_pop_var,
+            "z_task_var": z_task.var(dim=0).mean().item(),
+            "z_domain_var": z_domain_var,
         }
 
     # ------------------------------------------------------------------
@@ -272,14 +292,14 @@ class ConvVAE(nn.Module):
 
     def forward(self, x, verbose=False):
         """
-        Returns
-        -------
-        out          : (B, num_classes, L)  decoder logits
-        mu           : (B, latent_dim)      full posterior mean
-        logvar       : (B, latent_dim)      full posterior log-variance
-        z            : (B, latent_dim)      reparameterized sample (used by decoder)
-        pheno_pred   : (B, pheno_dim)       predicted from z_shared = mu[:, :shared_dim]
-        domain_logits: (B, num_domains)     predicted from GRL(z_shared), or None
+        Returns a 7-tuple:
+            out          (B, num_classes, L)  decoder logits
+            mu           (B, latent_dim)      posterior mean
+            logvar       (B, latent_dim)      posterior log-variance
+            z            (B, latent_dim)      reparameterized sample
+            pheno_pred   (B, pheno_dim)       predicted from z_task
+            grl_logits   (B, num_domains) or None  adversarial clf on z_task
+            domain_logits(B, num_domains) or None  cooperative clf on z_domain
         """
         if verbose:
             print(f"Input: {x.shape}")
@@ -299,24 +319,23 @@ class ConvVAE(nn.Module):
         logvar = torch.clamp(logvar, min=-6.0, max=6.0)
         z = self.reparameterize(mu, logvar)
 
-        # ── Split mu into the two subspaces ───────────────────────────────
-        # z_shared: domain-invariant, used for phenotype + GRL
-        # z_pop:    population-specific, only used implicitly via full z in decoder
-        z_shared = mu[:, : self.shared_dim]  # (B, shared_dim)
-        # z_pop  = mu[:, self.shared_dim:]   # (B, latent_dim - shared_dim)
-        #   not needed explicitly here — decoder uses full z
+        z_task = mu[:, : self.task_dim]    # (B, task_dim)
+        z_domain = mu[:, self.task_dim :]  # (B, latent_dim - task_dim)
 
-        # Phenotype prediction from z_shared (deterministic path)
-        pheno_pred = self.pheno_head(z_shared)
+        pheno_pred = self.pheno_head(z_task)
 
-        # Domain classification through reversed gradients on z_shared only
-        if self.use_grl:
-            z_shared_rev = self.grl(z_shared)
-            domain_logits = self.domain_classifier(z_shared_rev)
-        else:
-            domain_logits = None
+        grl_logits = (
+            self.grl_classifier(self.grl(z_task))
+            if self.grl is not None
+            else None
+        )
 
-        # Decoder — full z, unchanged
+        domain_logits = (
+            self.domain_classifier(z_domain)
+            if self.domain_classifier is not None
+            else None
+        )
+
         h_dec = self.fc_decode(z)
         h_dec = h_dec.view(x.size(0), self.final_channels, self.final_length)
         out = h_dec
@@ -331,7 +350,7 @@ class ConvVAE(nn.Module):
         if out.shape != expected_shape:
             raise ValueError(
                 f"Decoder output shape {out.shape} does not match "
-                f"expected logits shape {expected_shape}"
+                f"expected {expected_shape}"
             )
 
-        return out, mu, logvar, z, pheno_pred, domain_logits
+        return out, mu, logvar, z, pheno_pred, grl_logits, domain_logits

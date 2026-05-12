@@ -290,23 +290,23 @@ rule all:
             sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
         ),
         # # --- LD decay diagnostics ---
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # *(expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ) if HAS_TARGET_TRAIN else []),
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
-        # # --- allele freq vs LD diagnostic ---
-        # expand(
-        #     VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-        #     exp_id=EXP_IDS,
-        # ),
+        expand(
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        ),
+        *(expand(
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        ) if HAS_TARGET_TRAIN else []),
+        expand(
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        ),
+        # --- allele freq vs LD diagnostic ---
+        expand(
+            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        ),
         # --- baselines ---
         expand(
             PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
@@ -544,17 +544,17 @@ rule train_vae:
 
 rule compare_ld_decay_discovery:
     input:
-        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        checkpoint=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=DISCOVERY_VAL,
         variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
-        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/reconstructed_genotypes_argmax.npy",
-        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_curves.npz",
-        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_truth_vs_reconstructed.png",
-        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+        reconstructed=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
     params:
-        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_discovery_val",
+        output_dir=lambda wc: VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id / "diagnostics/ld_decay_discovery_val",
         batch_size=128,
         distance_mode="bp",
         max_bp_distance=50000,
@@ -584,17 +584,17 @@ rule compare_ld_decay_discovery:
 
 rule compare_ld_decay_target_train:
     input:
-        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        checkpoint=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=TARGET_TRAIN,
         variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
-        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/reconstructed_genotypes_argmax.npy",
-        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_curves.npz",
-        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_truth_vs_reconstructed.png",
-        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+        reconstructed=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
     params:
-        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target_train",
+        output_dir=lambda wc: VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id / "diagnostics/ld_decay_target_train",
         batch_size=128,
         distance_mode="bp",
         max_bp_distance=50000,
@@ -624,17 +624,17 @@ rule compare_ld_decay_target_train:
 
 rule compare_ld_decay_target_held_out:
     input:
-        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        checkpoint=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
         genotype_npy=TARGET_HELD_OUT,
         variant_positions=PROC_BASEDIR / "0/rep0/variant_positions_bp.npy",
         script=COMPARE_LD_SCRIPT,
     output:
-        reconstructed=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/reconstructed_genotypes_argmax.npy",
-        curves=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_curves.npz",
-        plot=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_truth_vs_reconstructed.png",
-        summary=VAE_BASEDIR / "{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+        reconstructed=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/reconstructed_genotypes_argmax.npy",
+        curves=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_curves.npz",
+        plot=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_truth_vs_reconstructed.png",
+        summary=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
     params:
-        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/ld_decay_target_held_out",
+        output_dir=lambda wc: VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id / "diagnostics/ld_decay_target_held_out",
         batch_size=128,
         distance_mode="bp",
         max_bp_distance=50000,
@@ -664,24 +664,24 @@ rule compare_ld_decay_target_held_out:
 
 rule diagnose_allelefreq_vs_ld:
     input:
-        checkpoint=VAE_BASEDIR / "{exp_id}/vae_outputs/checkpoints/best_model.pt",
+        checkpoint=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
         train_genotype_npy=DISCOVERY_TRAIN,
         eval_genotype_npy=DISCOVERY_VAL,
         script=DIAGNOSE_AF_LD_SCRIPT,
     output:
-        reconstructed_eval=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_argmax.npy",
-        reconstructed_eval_shuffled=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_argmax_shuffled_input.npy",
-        reconstructed_baseline=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_frequency_baseline.npy",
-        snp_permutation=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/snp_permutation.npy",
-        maf_eval=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/maf_eval.npy",
-        per_snp_bal_acc_vae=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/per_snp_bal_acc_vae.npy",
-        per_snp_bal_acc_baseline=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/per_snp_bal_acc_baseline.npy",
-        plot=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/balanced_accuracy_vs_maf.png",
-        maf_summary=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/maf_accuracy_summary.tsv",
-        summary_txt=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-        summary_npz=VAE_BASEDIR / "{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.npz",
+        reconstructed_eval=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_argmax.npy",
+        reconstructed_eval_shuffled=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_argmax_shuffled_input.npy",
+        reconstructed_baseline=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/reconstructed_eval_frequency_baseline.npy",
+        snp_permutation=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/snp_permutation.npy",
+        maf_eval=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/maf_eval.npy",
+        per_snp_bal_acc_vae=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/per_snp_bal_acc_vae.npy",
+        per_snp_bal_acc_baseline=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/per_snp_bal_acc_baseline.npy",
+        plot=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/balanced_accuracy_vs_maf.png",
+        maf_summary=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/maf_accuracy_summary.tsv",
+        summary_txt=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+        summary_npz=VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.npz",
     params:
-        output_dir=lambda wc: VAE_BASEDIR / wc.exp_id / "diagnostics/allelefreq_vs_ld_discovery_val",
+        output_dir=lambda wc: VAE_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / wc.exp_id / "diagnostics/allelefreq_vs_ld_discovery_val",
         batch_size=128,
         seed=0,
         maf_bins="0 0.01 0.05 0.1 0.2 0.3 0.4 0.5",

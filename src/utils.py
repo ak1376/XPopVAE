@@ -31,7 +31,7 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
             else:
                 raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
-            _, mu, _, _, _, _ = model(x)
+            _, mu, _, _, _, _, _ = model(x)
             mu_all.append(mu.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
     return np.concatenate(mu_all, axis=0), np.concatenate(labels_all, axis=0)
@@ -51,7 +51,7 @@ def extract_std(model, dataloader, device, use_masked_input=False):
             else:
                 raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
-            _, _, logvar, _, _, _ = model(x)
+            _, _, logvar, _, _, _, _ = model(x)
             logvar_all.append(logvar.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
     return np.concatenate(logvar_all, axis=0), np.concatenate(labels_all, axis=0)
@@ -72,7 +72,7 @@ def extract_mu_and_z(model, dataloader, device, use_masked_input=False):
             else:
                 raise ValueError(f"Unexpected batch length {len(batch)}")
             x = x.to(device)
-            _, mu, _, z, _, _ = model(x)
+            _, mu, _, z, _, _, _ = model(x)
             mu_all.append(mu.cpu().numpy())
             z_all.append(z.cpu().numpy())
             labels_all.append(pop_label.cpu().numpy())
@@ -276,8 +276,11 @@ def load_model_from_checkpoint(
 
     da_cfg = vae_config.get("domain_adaptation", {})
     use_grl = bool(da_cfg.get("use_grl", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
-    grl_hidden_dim = int(raw) if raw is not None else None
+    raw_grl = da_cfg.get("grl_hidden_dim", None)
+    grl_hidden_dim = int(raw_grl) if raw_grl is not None else None
+    use_domain_clf = bool(da_cfg.get("use_domain_clf", False))
+    raw_clf = da_cfg.get("domain_clf_hidden_dim", None)
+    domain_clf_hidden_dim = int(raw_clf) if raw_clf is not None else None
 
     model = ConvVAE(
         input_length=input_length,
@@ -287,19 +290,47 @@ def load_model_from_checkpoint(
         stride=int(vae_config["model"]["stride"]),
         padding=int(vae_config["model"]["padding"]),
         latent_dim=int(vae_config["model"]["latent_dim"]),
-        shared_dim=int(vae_config["model"]["shared_dim"]),
+        task_dim=vae_config["model"].get("task_dim", None),
         use_batchnorm=bool(vae_config["model"].get("use_batchnorm", False)),
         activation=vae_config["model"].get("activation", "elu"),
         pheno_dim=1,
         pheno_hidden_dim=pheno_hidden_dim,
         use_grl=use_grl,
         grl_hidden_dim=grl_hidden_dim,
+        use_domain_clf=use_domain_clf,
+        domain_clf_hidden_dim=domain_clf_hidden_dim,
         num_domains=2,
     ).to(device)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     return model
+
+
+def save_split_latents(
+    model,
+    loader,
+    device,
+    use_masked: bool,
+    out_dir: Path,
+    split_name: str,
+    phase: str,
+):
+    """
+    Extract mu from the encoder, split into z_task and z_domain, and save
+    as {split_name}_{phase}_z_task.npy and {split_name}_{phase}_z_domain.npy.
+
+    phase: "pre_training" or "post_training"
+    """
+    mu, labels = extract_mu(model, loader, device, use_masked_input=use_masked)
+    task_dim = model.task_dim
+    np.save(out_dir / f"{split_name}_{phase}_z_task.npy",   mu[:, :task_dim])
+    np.save(out_dir / f"{split_name}_{phase}_z_domain.npy", mu[:, task_dim:])
+    np.save(out_dir / f"{split_name}_{phase}_pop_labels.npy", labels)
+    print(
+        f"  Saved {phase} latents for {split_name}: "
+        f"z_task={mu[:, :task_dim].shape}  z_domain={mu[:, task_dim:].shape}"
+    )
 
 
 def reconstruct_argmax_genotypes(
@@ -318,7 +349,7 @@ def reconstruct_argmax_genotypes(
     with torch.no_grad():
         for (x,) in loader:
             x = x.to(device)
-            logits, _, _, _, _, _ = model(x)
+            logits, _, _, _, _, _, _ = model(x)
             pred = torch.argmax(logits, dim=1)
             recon_batches.append(pred.cpu().numpy())
 

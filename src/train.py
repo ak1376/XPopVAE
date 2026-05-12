@@ -7,8 +7,9 @@ from src.loss import (
     domain_loss,
     mmd_loss,
 )
+
 # =============================================================================
-# GRL lambda schedule
+# GRL lambda schedule (kept for use_grl=True configs)
 # =============================================================================
 
 
@@ -21,8 +22,6 @@ def compute_grl_lambda(
     Ganin et al. (2016) schedule:
         lambda = lambda_max * (2 / (1 + exp(-10 * p)) - 1)
     where p = current_epoch / total_epochs in [0, 1].
-
-    Starts near 0, ramps smoothly to lambda_max.
     """
     import math
 
@@ -31,7 +30,7 @@ def compute_grl_lambda(
 
 
 # =============================================================================
-# Domain-accuracy helper (no grad, for adaptive weighting / logging)
+# Domain-accuracy helper
 # =============================================================================
 
 
@@ -56,11 +55,14 @@ def train_one_epoch(
     alpha: float = 1.0,
     beta: float = 1.0,
     gamma: float = 1.0,
-    # --- GRL ---
+    # --- adversarial GRL on z_task ---
     use_grl: bool = False,
-    # --- MMD ---
+    # --- MMD on z_task ---
     use_mmd: bool = False,
-    delta: float = 1.0,
+    delta: float = 1.0,   # weight for both GRL and MMD
+    # --- cooperative domain classifier on z_domain ---
+    use_domain_clf: bool = False,
+    lam_domain: float = 1.0,
 ):
     model.train()
 
@@ -69,11 +71,14 @@ def train_one_epoch(
     total_recon_masked = 0.0
     total_kl_loss = 0.0
     total_phenotype_loss = 0.0
-    total_domain_loss = 0.0
+    total_grl_loss = 0.0
+    total_grl_acc = 0.0
+    total_domain_clf_loss = 0.0
     total_domain_acc = 0.0
-    total_z_shared_var = 0.0
-    has_z_pop = model.shared_dim < model.latent_dim
-    total_z_pop_var = 0.0 if has_z_pop else None
+    total_mmd_loss = 0.0
+    total_z_task_var = 0.0
+    has_z_domain = model.task_dim < model.latent_dim
+    total_z_domain_var = 0.0 if has_z_domain else None
     batch_ceu_fracs = []
 
     for x, pheno, pop_label in dataloader:
@@ -94,13 +99,13 @@ def train_one_epoch(
 
         optimizer.zero_grad()
 
-        out, mu, logvar, z, pheno_pred, domain_logits = model(input_x)
+        out, mu, logvar, z, pheno_pred, grl_logits, domain_logits = model(input_x)
         targets = x.squeeze(1).long()
 
         stats = model.latent_stats(mu)
-        total_z_shared_var += stats["z_shared_var"]
-        if has_z_pop:
-            total_z_pop_var += stats["z_pop_var"]
+        total_z_task_var += stats["z_task_var"]
+        if has_z_domain:
+            total_z_domain_var += stats["z_domain_var"]
 
         recon_unmasked = recon_unmasked_loss(out, targets, mask)
         recon_masked_l = recon_masked_loss(out, targets, mask)
@@ -123,24 +128,34 @@ def train_one_epoch(
         )
 
         # ------------------------------------------------------------------
-        # Domain adaptation loss — GRL or MMD, mutually exclusive
+        # Adversarial GRL on z_task (optional)
         # ------------------------------------------------------------------
-        if use_grl and domain_logits is not None:
+        if use_grl and grl_logits is not None:
+            g_loss = domain_loss(grl_logits, pop_label)
+            g_acc = domain_accuracy(grl_logits, pop_label)
+            loss = loss + delta * g_loss
+            total_grl_loss += g_loss.item()
+            total_grl_acc += g_acc
+
+        # ------------------------------------------------------------------
+        # MMD on z_task — aligns source/target marginals (optional)
+        # ------------------------------------------------------------------
+        if use_mmd:
+            ceu_z_task = mu[pop_label == 0, : model.task_dim]
+            yri_z_task = mu[pop_label == 1, : model.task_dim]
+            m_loss = mmd_loss(ceu_z_task, yri_z_task)
+            loss = loss + delta * m_loss
+            total_mmd_loss += m_loss.item()
+
+        # ------------------------------------------------------------------
+        # Cooperative domain classifier on z_domain — pulls ancestry info in
+        # ------------------------------------------------------------------
+        if use_domain_clf and domain_logits is not None:
             d_loss = domain_loss(domain_logits, pop_label)
             d_acc = domain_accuracy(domain_logits, pop_label)
-            loss = loss + delta * d_loss
-            total_domain_loss += d_loss.item()
+            loss = loss + lam_domain * d_loss
+            total_domain_clf_loss += d_loss.item()
             total_domain_acc += d_acc
-        elif use_mmd:
-            ceu_z = mu[pop_label == 0, :model.shared_dim]
-            yri_z = mu[pop_label == 1, :model.shared_dim]
-            m_loss = mmd_loss(ceu_z, yri_z)
-            loss = loss + delta * m_loss
-            total_domain_loss += m_loss.item()
-            total_domain_acc += 0.0  # no classifier when using MMD
-        else:
-            total_domain_loss += 0.0
-            total_domain_acc += 0.0
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -159,12 +174,16 @@ def train_one_epoch(
         total_recon_masked / n,
         total_kl_loss / n,
         total_phenotype_loss / n,
-        total_domain_loss / n,
+        total_grl_loss / n,
+        total_grl_acc / n,
+        total_domain_clf_loss / n,
         total_domain_acc / n,
-        total_z_shared_var / n,
-        total_z_pop_var / n if has_z_pop else None,
+        total_mmd_loss / n,
+        total_z_task_var / n,
+        total_z_domain_var / n if has_z_domain else None,
         batch_ceu_fracs,
     )
+
 
 # =============================================================================
 # Evaluation
@@ -175,9 +194,7 @@ def train_one_epoch(
 def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0):
     """
     Evaluate on an eval-style loader (5-tuple batches).
-
     Returns 5 floats: total_loss, recon_unmasked, recon_masked, kl, pheno_loss.
-    Domain logits are ignored — evaluation doesn't update weights.
     """
     model.eval()
 
@@ -194,7 +211,7 @@ def evaluate(model, dataloader, device, loss_fn, alpha=1.0, beta=1.0, gamma=1.0)
         mask = mask.to(device)
         pop_label = pop_label.to(device)
 
-        out, mu, logvar, z, pheno_pred, _domain_logits = model(input_x)
+        out, mu, logvar, z, pheno_pred, _grl_logits, _domain_logits = model(input_x)
         targets = x.squeeze(1).long()
 
         recon_unmasked = recon_unmasked_loss(out, targets, mask)

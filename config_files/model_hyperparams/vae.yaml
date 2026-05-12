@@ -1,7 +1,7 @@
 model:
   model_type: fully_conv
   latent_dim: 128
-  shared_dim: 128
+  task_dim: 64    # z_task dims; z_domain gets latent_dim - task_dim
   hidden_channels:
   - 32
   - 64
@@ -45,23 +45,27 @@ masking:
   constant_value: -1.0
 phenotype:
   pheno_hidden_dim: null
-  gamma: 1.0
+  gamma: 0.6
   pheno_weight_decay: 0.0
 domain_adaptation:
-  use_grl: false
+  use_grl: false          # adversarial GRL classifier on z_task
   grl_hidden_dim: null
   lambda_max: 1.0
-  delta: 1.0
+  delta: 1.0              # weight for GRL loss (and MMD if use_mmd=true)
+  use_mmd: true          # MMD alignment loss on z_task
+  use_domain_clf: true   # cooperative domain classifier on z_domain
+  domain_clf_hidden_dim: null
+  lam_domain: 1.0         # weight for cooperative domain clf loss
 seed: 0
 grid:
   enabled: true
   name:
-    prefix: "vae_grl_no_phenotype_loss"
+    prefix: "vae"
     sep: "__"
-  dims:
-    - path: "domain_adaptation.use_grl"
-      values: [True, False]
-      tag: "use_grl"
+  # dims:
+  #   - path: "domain_adaptation.use_grl"
+  #     values: [True, False]
+  #     tag: "use_grl"
     # - path: phenotype.gamma
     #   values: [1.0]
     #   tag: "gamma"
@@ -71,9 +75,9 @@ grid:
     # - path: "model.use_causal_channel"
     #   values: [True]
     #   tag: "causal"
-    # - path: model.shared_dim
+    # - path: model.task_dim
     #   values: [8, 16, 32, 64, 100, 120]
-    #   tag: "shared_dim"
+    #   tag: "task_dim"
     # - path: "domain_adaptation.lambda_max"
     #   values: [0.0, 0.25, 0.5, 0.75, 1.0]
     #   tag: "lambda_max"

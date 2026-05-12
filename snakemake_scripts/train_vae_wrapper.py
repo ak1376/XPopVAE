@@ -48,7 +48,7 @@ from src.plotting import (
     plot_latent_pca_shared_basis,
     plot_latent_activation_movie,
 )
-from src.train import evaluate, train_one_epoch, compute_grl_lambda
+from src.train import evaluate, train_one_epoch
 
 from src.utils import (
     extract_latent,
@@ -58,6 +58,7 @@ from src.utils import (
     make_eval_loader,
     run_eval_plots,
     extract_latent_with_pheno,
+    save_split_latents,
 )
 
 # =============================================================================
@@ -98,9 +99,7 @@ def main(
     stride = int(vae_config["model"]["stride"])
     padding = int(vae_config["model"]["padding"])
     latent_dim = int(vae_config["model"]["latent_dim"])
-    shared_dim = vae_config["model"].get(
-        "shared_dim", None
-    )  # defaults to latent_dim // 2
+    task_dim = vae_config["model"].get("task_dim", None)  # defaults to latent_dim // 2
 
     # ------------------------------------------------------------------
     # hyperparameters — training
@@ -128,27 +127,34 @@ def main(
     pheno_weight_decay = float(vae_config["phenotype"].get("pheno_weight_decay", 0.0))
 
     # ------------------------------------------------------------------
-    # hyperparameters — domain adaptation (GRL)
+    # hyperparameters — domain adaptation
     # ------------------------------------------------------------------
     da_cfg = vae_config.get("domain_adaptation", {})
     use_grl = bool(da_cfg.get("use_grl", False))
     use_mmd = bool(da_cfg.get("use_mmd", False))
-    raw = da_cfg.get("grl_hidden_dim", None)
-    grl_hidden_dim = int(raw) if raw is not None else None
+    use_domain_clf = bool(da_cfg.get("use_domain_clf", False))
+    raw_grl = da_cfg.get("grl_hidden_dim", None)
+    grl_hidden_dim = int(raw_grl) if raw_grl is not None else None
+    raw_clf = da_cfg.get("domain_clf_hidden_dim", None)
+    domain_clf_hidden_dim = int(raw_clf) if raw_clf is not None else None
     grl_lambda_max = float(da_cfg.get("lambda_max", 1.0))
     delta = float(da_cfg.get("delta", 1.0))
+    lam_domain = float(da_cfg.get("lam_domain", 1.0))
 
     print(f"Masking enabled: {masking}")
     print(
-        f"GRL enabled: {use_grl}"
-        + (
-            f"  lambda_max={grl_lambda_max}  grl_hidden_dim={grl_hidden_dim}  delta={delta}"
-            if use_grl
-            else ""
-        )
+        f"GRL on z_task: {use_grl}"
+        + (f"  lambda_max={grl_lambda_max}  delta={delta}" if use_grl else "")
     )
+    print(f"MMD on z_task: {use_mmd}" + (f"  delta={delta}" if use_mmd else ""))
     print(
-        f"Latent dim: {latent_dim}  shared_dim: {shared_dim if shared_dim is not None else latent_dim // 2} (default)"
+        f"Cooperative domain clf on z_domain: {use_domain_clf}"
+        + (f"  lam_domain={lam_domain}" if use_domain_clf else "")
+    )
+    _task_dim_display = task_dim if task_dim is not None else latent_dim // 2
+    print(
+        f"Latent dim: {latent_dim}  task_dim: {_task_dim_display}  "
+        f"domain_dim: {latent_dim - _task_dim_display}"
     )
 
     # ------------------------------------------------------------------
@@ -316,20 +322,26 @@ def main(
         activation="elu",
         pheno_dim=1,
         pheno_hidden_dim=pheno_hidden_dim,
+        task_dim=task_dim,
         use_grl=use_grl,
         grl_hidden_dim=grl_hidden_dim,
+        use_domain_clf=use_domain_clf,
+        domain_clf_hidden_dim=domain_clf_hidden_dim,
         num_domains=2,
-        shared_dim=shared_dim,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(
-        f"Latent split: z_shared={model.shared_dim}  z_pop={latent_dim - model.shared_dim}"
+        f"Latent split: z_task={model.task_dim}  z_domain={latent_dim - model.task_dim}"
     )
 
     x_batch = next(iter(train_loader))[0].to(device)
     with torch.no_grad():
-        logits, mu, logvar, z, pheno_pred, domain_logits = model(x_batch, verbose=True)
+        logits, mu, logvar, z, pheno_pred, grl_logits, domain_logits = model(
+            x_batch, verbose=True
+        )
+    if grl_logits is not None:
+        print(f"grl_logits: {grl_logits.shape}")
     if domain_logits is not None:
         print(f"domain_logits: {domain_logits.shape}")
 
@@ -352,14 +364,29 @@ def main(
     train_loss_list, train_recon_unmasked_list = [], []
     train_recon_masked_list, train_kl_list = [], []
     train_phenotype_loss_list = []
-    train_domain_loss_list = []
+    train_grl_loss_list = []
+    train_grl_acc_list = []
+    train_domain_clf_loss_list = []
     train_domain_acc_list = []
-    train_z_shared_var_list = []
-    train_z_pop_var_list = []
+    train_mmd_loss_list = []
+    train_z_task_var_list = []
+    train_z_domain_var_list = []
     train_ceu_frac_list = []
     grl_lambda_list = []
 
     latent_snapshots = []  # per-epoch (mu, z) snapshots for activation movie
+
+    # ------------------------------------------------------------------
+    # Save pre-training latent vectors (z_task and z_domain)
+    # ------------------------------------------------------------------
+    latents_dir = out / "latents"
+    latents_dir.mkdir(parents=True, exist_ok=True)
+    print("Saving pre-training latents...")
+    save_split_latents(model, disc_train_loader, device, masking,
+                       latents_dir, "disc_train", "pre_training")
+    if target_train_loader is not None:
+        save_split_latents(model, target_train_loader, device, masking,
+                           latents_dir, "target_train", "pre_training")
 
     val_loss_list, val_recon_unmasked_list = [], []
     val_recon_masked_list, val_kl_list = [], []
@@ -388,10 +415,13 @@ def main(
             train_recon_masked,
             train_kl,
             train_pheno,
-            train_domain,
+            train_grl,
+            train_grl_acc,
+            train_domain_clf,
             train_d_acc,
-            train_z_shared_var,
-            train_z_pop_var,
+            train_mmd,
+            train_z_task_var,
+            train_z_domain_var,
             train_ceu_frac,
         ) = train_one_epoch(
             model=model,
@@ -406,6 +436,8 @@ def main(
             use_grl=use_grl,
             use_mmd=use_mmd,
             delta=delta,
+            use_domain_clf=use_domain_clf,
+            lam_domain=lam_domain,
         )
 
         val_loss, val_recon_unmasked, val_recon_masked, val_kl, val_pheno = evaluate(
@@ -430,12 +462,15 @@ def main(
         train_recon_masked_list.append(train_recon_masked)
         train_kl_list.append(train_kl)
         train_phenotype_loss_list.append(train_pheno)
-        train_domain_loss_list.append(train_domain)
+        train_grl_loss_list.append(train_grl)
+        train_grl_acc_list.append(train_grl_acc)
+        train_domain_clf_loss_list.append(train_domain_clf)
         train_domain_acc_list.append(train_d_acc)
-        train_z_shared_var_list.append(train_z_shared_var)
-        train_z_pop_var_list.append(train_z_pop_var)
+        train_mmd_loss_list.append(train_mmd)
+        train_z_task_var_list.append(train_z_task_var)
+        train_z_domain_var_list.append(train_z_domain_var)
+        train_ceu_frac_list.append(train_ceu_frac)
         grl_lambda_list.append(grl_lam)
-        train_ceu_frac_list.append(train_ceu_frac)  # list of per-batch fractions
 
         val_loss_list.append(val_loss)
         val_recon_unmasked_list.append(val_recon_unmasked)
@@ -443,26 +478,29 @@ def main(
         val_kl_list.append(val_kl)
         val_phenotype_loss_list.append(val_pheno)
 
+        da_str = ""
         if use_grl:
-            grl_str = (
-                f" | grl_lam={grl_lam:.3f}  domain_ce={train_domain:.4f}"
-                f"  domain_acc={train_d_acc:.3f}"
+            da_str += (
+                f" | grl_lam={grl_lam:.3f}  grl_ce={train_grl:.4f}"
+                f"  grl_acc={train_grl_acc:.3f}"
             )
-        elif use_mmd:
-            grl_str = f" | mmd_loss={train_domain:.4f}"
-        else:
-            grl_str = ""
+        if use_mmd:
+            da_str += f" | mmd={train_mmd:.4f}"
+        if use_domain_clf:
+            da_str += (
+                f" | domain_ce={train_domain_clf:.4f}  domain_acc={train_d_acc:.3f}"
+            )
 
         print(
             f"Epoch {epoch+1:03d}/{num_epochs} | "
             f"train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | "
             f"train_recon={train_recon_unmasked:.6f} | train_pheno={train_pheno:.6f} | "
             f"val_recon={val_recon_unmasked:.6f} | val_pheno={val_pheno:.6f}"
-            + grl_str
-            + f" | z_shared_var={train_z_shared_var:.4f}"
+            + da_str
+            + f" | z_task_var={train_z_task_var:.4f}"
             + (
-                f"  z_pop_var={train_z_pop_var:.4f}"
-                if train_z_pop_var is not None
+                f"  z_domain_var={train_z_domain_var:.4f}"
+                if train_z_domain_var is not None
                 else ""
             )
         )
@@ -477,8 +515,11 @@ def main(
                 model, target_train_loader, device, use_masked_input=masking
             )
         latent_snapshots.append(
-            dict(epoch=epoch + 1, grl_lam=grl_lam,
-                 domain_loss=train_domain,
+            dict(epoch=epoch + 1,
+                 grl_lam=grl_lam,
+                 domain_loss=train_grl if use_grl else train_mmd,
+                 mmd_loss=train_mmd,
+                 domain_clf_loss=train_domain_clf,
                  mu_ceu=mu_ceu, mu_yri=mu_yri)
         )
 
@@ -531,18 +572,23 @@ def main(
         val_phenotype_losses=np.array(val_phenotype_loss_list),
         train_recon_masked_losses=np.array(train_recon_masked_list),
         val_recon_masked_losses=np.array(val_recon_masked_list),
-        train_z_shared_var=np.array(train_z_shared_var_list),
-        train_ceu_frac=np.array(train_ceu_frac_list),  # shape: (epochs, batches_per_epoch)
+        train_z_task_var=np.array(train_z_task_var_list),
+        train_ceu_frac=np.array(train_ceu_frac_list),
         **(
-            {"train_z_pop_var": np.array(train_z_pop_var_list)}
-            if train_z_pop_var_list[0] is not None
+            {"train_z_domain_var": np.array(train_z_domain_var_list)}
+            if train_z_domain_var_list[0] is not None
             else {}
         ),
     )
     if use_grl:
-        history_dict["train_domain_losses"] = np.array(train_domain_loss_list)
-        history_dict["train_domain_acc"] = np.array(train_domain_acc_list)
+        history_dict["train_grl_losses"] = np.array(train_grl_loss_list)
+        history_dict["train_grl_acc"] = np.array(train_grl_acc_list)
         history_dict["grl_lambdas"] = np.array(grl_lambda_list)
+    if use_mmd:
+        history_dict["train_mmd_losses"] = np.array(train_mmd_loss_list)
+    if use_domain_clf:
+        history_dict["train_domain_clf_losses"] = np.array(train_domain_clf_loss_list)
+        history_dict["train_domain_acc"] = np.array(train_domain_acc_list)
 
     np.savez(out / "training_history.npz", **history_dict)
 
@@ -557,18 +603,23 @@ def main(
         val_pheno_losses=val_phenotype_loss_list,
         train_recon_masked_losses=train_recon_masked_list if masking else None,
         val_recon_masked_losses=val_recon_masked_list if masking else None,
-        train_domain_losses=train_domain_loss_list if (use_grl or use_mmd) else None,
-        train_domain_accs=train_domain_acc_list if use_grl else None,
-        train_z_shared_vars=train_z_shared_var_list,
+        train_mmd_losses=train_mmd_loss_list if use_mmd else None,
+        train_domain_losses=train_grl_loss_list if use_grl else (
+            train_domain_clf_loss_list if use_domain_clf else None
+        ),
+        train_domain_accs=train_grl_acc_list if use_grl else (
+            train_domain_acc_list if use_domain_clf else None
+        ),
+        train_z_shared_vars=train_z_task_var_list,
         train_z_pop_vars=(
-            train_z_pop_var_list if train_z_pop_var_list[0] is not None else None
+            train_z_domain_var_list if train_z_domain_var_list[0] is not None else None
         ),
         output_dir=out,
     )
 
     if use_grl:
         lambda_loss_dict = {
-            "domain loss": (train_domain_loss_list, None, "loss_vs_lambda_domain"),
+            "domain loss": (train_grl_loss_list, None, "loss_vs_lambda_domain"),
             "recon loss (unmasked)": (train_recon_unmasked_list, val_recon_unmasked_list, "loss_vs_lambda_recon_unmasked"),
             "KL loss": (train_kl_list, val_kl_list, "loss_vs_lambda_kl"),
             "phenotype loss": (train_phenotype_loss_list, val_phenotype_loss_list, "loss_vs_lambda_phenotype"),
@@ -598,6 +649,16 @@ def main(
         f"Reloaded best model from epoch {best_ckpt['epoch']} "
         f"with stop_metric={best_ckpt['val_loss']:.6f}"
     )
+
+    # ------------------------------------------------------------------
+    # Save post-training latent vectors (z_task and z_domain)
+    # ------------------------------------------------------------------
+    print("Saving post-training latents...")
+    save_split_latents(model, disc_train_loader, device, masking,
+                       latents_dir, "disc_train", "post_training")
+    if target_train_loader is not None:
+        save_split_latents(model, target_train_loader, device, masking,
+                           latents_dir, "target_train", "post_training")
 
     use_masked = masking
 

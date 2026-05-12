@@ -73,7 +73,7 @@ def extract_pheno_predictions(model, dataloader, device, use_masked_input=False)
 
         x_input = x_input.to(device)
 
-        logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
+        logits, mu, logvar, z, pheno_pred, _grl_logits, _domain_logits = model(x_input)
 
         all_true.append(_to_numpy(pheno))
         all_pred.append(_to_numpy(pheno_pred))
@@ -235,7 +235,7 @@ def plot_reconstruction(
         x_input = x_input.to(device)
         x_true = x_true.to(device)
 
-        logits, mu, logvar, z, pheno_pred, _domain_logits = model(x_input)
+        logits, mu, logvar, z, pheno_pred, _grl_logits, _domain_logits = model(x_input)
 
         y_true = x_true.long().squeeze(1).cpu().numpy()
         y_pred = torch.argmax(logits, dim=1).cpu().numpy()
@@ -330,7 +330,7 @@ def extract_mu(model, dataloader, device, use_masked_input=False):
 
         x_input = x_input.to(device)
 
-        _, mu, _, _, _, _domain_logits = model(x_input)
+        _, mu, _, _, _, _grl_logits, _domain_logits = model(x_input)
 
         all_mu.append(mu.cpu())
         all_labels.append(pop_label.cpu())
@@ -477,8 +477,9 @@ def plot_loss_curves(
     val_recon_masked_losses=None,
     train_domain_losses=None,
     train_domain_accs=None,
-    train_z_shared_vars=None,  # new: per-epoch mean variance of z_shared
-    train_z_pop_vars=None,  # new: per-epoch mean variance of z_pop
+    train_mmd_losses=None,
+    train_z_shared_vars=None,
+    train_z_pop_vars=None,
 ):
     _ensure_dir(output_dir)
     epochs = range(1, len(train_losses) + 1)
@@ -541,6 +542,17 @@ def plot_loss_curves(
     plt.savefig(f"{output_dir}/loss_pheno.png", dpi=300)
     plt.close()
 
+    if train_mmd_losses is not None:
+        plt.figure(figsize=(8, 5))
+        plt.plot(epochs, train_mmd_losses, label="train MMD (z_task)", color="purple")
+        plt.xlabel("epoch")
+        plt.ylabel("MMD loss")
+        plt.title("MMD alignment loss on z_task (training only)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/loss_mmd.png", dpi=300)
+        plt.close()
+
     if train_domain_losses is not None:
         plt.figure(figsize=(8, 5))
         plt.plot(epochs, train_domain_losses, label="train domain CE")
@@ -560,23 +572,24 @@ def plot_loss_curves(
         plt.ylabel("domain classifier accuracy")
         plt.title(
             "Domain classifier accuracy (training)\n"
-            "Closer to 0.5 = more domain-agnostic latent space"
+            "Closer to 1.0 = more ancestry info in z_domain"
         )
         plt.legend()
         plt.tight_layout()
         plt.savefig(f"{output_dir}/domain_classifier_accuracy.png", dpi=300)
         plt.close()
 
-    # latent subspace variance — always plot if provided
-    if train_z_shared_vars is not None and train_z_pop_vars is not None:
+    # latent subspace variance
+    if train_z_shared_vars is not None:
         plt.figure(figsize=(8, 5))
-        plt.plot(epochs, train_z_shared_vars, label="z_shared variance")
-        plt.plot(epochs, train_z_pop_vars, label="z_pop variance")
+        plt.plot(epochs, train_z_shared_vars, label="z_task variance")
+        if train_z_pop_vars is not None:
+            plt.plot(epochs, train_z_pop_vars, label="z_domain variance")
         plt.xlabel("epoch")
         plt.ylabel("mean per-dim variance")
         plt.title(
             "Latent subspace variance\n"
-            "z_pop collapsing toward 0 = split not working as intended"
+            "z_domain collapsing toward 0 = domain split not working"
         )
         plt.legend()
         plt.tight_layout()
