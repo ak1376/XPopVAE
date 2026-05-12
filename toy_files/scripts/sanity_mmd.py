@@ -4,28 +4,31 @@ sanity_mmd.py
 Domain adaptation sanity check:
   - Encoder (MLP: x → z) + Predictor (z → y, regression)
   - Task loss: MSE on source training data only
-  - MMD alignment: minimize MMD(z_src_train, z_tgt_train) directly (no GRL)
-  - Evaluate: source val MSE and held-out target test MSE
-  - Optuna hyperparameter search; objective = best source val MSE (no tgt leakage)
+  - MMD alignment: minimize MMD(z_task_src, z_task_tgt) directly
+  - GRL on z_task: adversarial domain classifier with reversed gradients
+      → encoder is pushed to remove domain signal from z_task
+  - Cooperative domain classifier on z_nuisance: normal gradients
+      → encoder is pulled to put domain signal into z_nuisance
 
 Data splits:
-  src_train (200): x ~ N(-5, 0.5),  y = x² + noise  — task loss + MMD
-  tgt_train (200): x ~ N(+5, 0.5),  unlabeled        — MMD only
+  src_train (200): x ~ N(-5, 0.5),  y = x² + noise  — task loss + MMD + GRL
+  tgt_train (200): x ~ N(+5, 0.5),  unlabeled        — MMD + GRL only
   src_val   (100): x ~ N(-5, 0.5),  y = x² + noise  — source evaluation
   tgt_test  (100): x ~ N(+5, 0.5),  y = x² + noise  — held-out target evaluation
 
 NOTE: y = x² so P_src(y) ≈ P_tgt(y) — covariate shift only.
-  With y = 2x, label distributions differ and alignment hurts prediction.
 
 Latent space split:
   z = [z_task (dim task_dim) | z_nuisance (dim nuisance_dim)]
-  - z_task:     used for prediction + MMD alignment
-  - z_nuisance: junk drawer with domain classifier pulling domain info in
+  - z_task:     prediction + MMD
+  - z_nuisance: cooperative domain clf pulling domain info in
 
-Loss: task_loss + lam_mmd * MMD(z_task_src, z_task_tgt)
+Loss: task_loss
+    + lam_mmd    * MMD(z_task_src, z_task_tgt)
+    + lam_grl    * BCE(grl_clf(GradReverse(z_task)), domain_label)
     + lam_domain * BCE(domain_clf(z_nuisance), domain_label)
 
-Optuna objective: best source val_mse (NOT tgt_mse — no leakage)
+Optuna objective: val_mse + beta * mean(final KS on z_task)
 """
 
 import numpy as np
@@ -67,6 +70,19 @@ def mmd_loss(z_src, z_tgt, sigma=None):
         + (K_tt * mask_t).sum() / (M * (M - 1)) \
         - 2 * K_st.sum() / (N * M)
     return mmd
+
+
+# ---------------------------------------------------------------------------
+# R² helper for nuisance-leakage plots
+# ---------------------------------------------------------------------------
+def _r2_fit(x_1d, y_1d):
+    """Fit y ~ b0 + b1*x; return (R², intercept, slope)."""
+    X = np.column_stack([np.ones(len(x_1d)), x_1d])
+    coef, *_ = np.linalg.lstsq(X, y_1d, rcond=None)
+    y_pred = X @ coef
+    ss_res = ((y_1d - y_pred) ** 2).sum()
+    ss_tot = ((y_1d - y_1d.mean()) ** 2).sum()
+    return float(1.0 - ss_res / (ss_tot + 1e-12)), coef[0], coef[1]
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +206,13 @@ def train_once(cfg, data, model_seed=42, snap_every=None):
     src_domain_labels = torch.zeros(n_train, 1)
     tgt_domain_labels = torch.ones(n_train,  1)
 
+    # Capture untrained (initial) representations before any gradient steps
+    encoder.eval()
+    with torch.no_grad():
+        _z_init_src = encoder(data['src_x_train']).numpy().copy()
+        _z_init_tgt = encoder(data['tgt_x_train']).numpy().copy()
+    encoder.train()
+
     best_val_mse      = float('inf')
     epochs_no_improve = 0
 
@@ -215,11 +238,11 @@ def train_once(cfg, data, model_seed=42, snap_every=None):
         task_loss  = mse_fn(predictor(z_task_src), data['src_y_train'])
         domain_mmd = mmd_loss(z_task_src, z_task_tgt)
 
+        # Cooperative clf on z_nuisance: normal gradients → encoder puts domain signal in z_nuisance
         z_nuisance_all    = torch.cat([z_nuisance_src, z_nuisance_tgt], dim=0)
         domain_labels_all = torch.cat([src_domain_labels, tgt_domain_labels], dim=0)
         domain_logits     = domain_clf(z_nuisance_all)
-        domain_clf_loss   = F.binary_cross_entropy_with_logits(
-            domain_logits, domain_labels_all)
+        domain_clf_loss   = F.binary_cross_entropy_with_logits(domain_logits, domain_labels_all)
 
         total_loss = task_loss + lam_mmd * domain_mmd + lam_domain * domain_clf_loss
 
@@ -269,7 +292,7 @@ def train_once(cfg, data, model_seed=42, snap_every=None):
         train_mse=train_mse_hist, val_mse=val_mse_hist, tgt_mse=tgt_mse_hist,
         mmd=mmd_hist, ks=ks_hist, domain_acc=domain_acc_hist,
     )
-    return best_val_mse, hist, (encoder, predictor, domain_clf), snapshots
+    return best_val_mse, hist, (encoder, predictor, domain_clf), snapshots, (_z_init_src, _z_init_tgt)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +321,7 @@ def objective(trial, data, beta_obj=0.5):
         'n_epochs':  10000,
         'min_delta': 1e-4,
     }
-    best_val_mse, hist, _, _ = train_once(cfg, data, model_seed=42, snap_every=None)
+    best_val_mse, hist, _, _, _ = train_once(cfg, data, model_seed=42, snap_every=None)
     final_ks = float(np.mean(hist['ks'][-50:]))   # average last 50 epochs for stability
     return best_val_mse + beta_obj * final_ks
 
@@ -306,8 +329,8 @@ def objective(trial, data, beta_obj=0.5):
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
-def plot_results(hist, cfg, data, models, snapshots):
-    encoder, predictor, _ = models
+def plot_results(hist, cfg, data, models, snapshots, z_init=None):
+    encoder, predictor, *_ = models
     task_dim     = cfg['task_dim']
     nuisance_dim = cfg['nuisance_dim']
     snap_every   = cfg.get('snap_every', 50)
@@ -425,6 +448,57 @@ def plot_results(hist, cfg, data, models, snapshots):
     plt.close()
     print("Saved mmd_da_ztask_vs_xtask.png")
 
+    # Nuisance leakage: R² of x_nuisance predicting each z dimension, before vs after
+    if z_init is not None:
+        z_before_src, z_before_tgt = z_init
+        x_nuis_src = data['src_x_train'][:, 1].numpy()
+        x_nuis_tgt = data['tgt_x_train'][:, 1].numpy()
+        x_nuis_all = np.concatenate([x_nuis_src, x_nuis_tgt])
+
+        groups = [
+            ('z_task',     range(task_dim),
+             [f'z_task[{d}]' for d in range(task_dim)]),
+            ('z_nuisance', range(task_dim, task_dim + nuisance_dim),
+             [f'z_nuisance[{d}]' for d in range(nuisance_dim)]),
+        ]
+        for group_label, global_dims, local_labels in groups:
+            n_dims = len(list(global_dims))
+            global_dims = list(global_dims)
+            fig, axes = plt.subplots(n_dims, 2, figsize=(12, 4 * n_dims), squeeze=False)
+
+            for row, (gd, label) in enumerate(zip(global_dims, local_labels)):
+                for col, (z_s, z_t, phase) in enumerate([
+                    (z_before_src, z_before_tgt, "Before training"),
+                    (z_s_final,    z_t_final,    "After training"),
+                ]):
+                    ax = axes[row, col]
+                    zs_d = z_s[:, gd]
+                    zt_d = z_t[:, gd]
+                    ax.scatter(x_nuis_src, zs_d, alpha=0.4, s=10,
+                               color="steelblue", label="source")
+                    ax.scatter(x_nuis_tgt, zt_d, alpha=0.4, s=10,
+                               color="tomato",    label="target")
+                    y_all = np.concatenate([zs_d, zt_d])
+                    r2, b0, b1 = _r2_fit(x_nuis_all, y_all)
+                    x_line = np.linspace(x_nuis_all.min(), x_nuis_all.max(), 100)
+                    ax.plot(x_line, b0 + b1 * x_line, "k--", linewidth=1.2, alpha=0.8)
+                    ax.set_xlabel("x_nuisance (standardised)")
+                    ax.set_ylabel(label)
+                    ax.set_title(f"{phase}   R²={r2:.3f}")
+                    if row == 0:
+                        ax.legend(fontsize=7, markerscale=2)
+
+            plt.suptitle(
+                f"{group_label} ← x_nuisance leakage\n"
+                f"high R² = x_nuisance can predict this z-dimension",
+                fontsize=12,
+            )
+            plt.tight_layout()
+            fname = f"mmd_da_leakage_{group_label}.png"
+            plt.savefig(fname, dpi=150, bbox_inches="tight")
+            plt.close()
+            print(f"Saved {fname}")
+
     # Scatter animation over training
     if snapshots and task_dim >= 2:
         all_z = np.concatenate([np.vstack([zs, zt]) for _, zs, zt in snapshots])
@@ -516,7 +590,7 @@ def main():
         'snap_every': 50,
     }
     print("\nFinal training with best config...")
-    best_val_mse, hist, models, snapshots = train_once(
+    best_val_mse, hist, models, snapshots, z_init = train_once(
         best_cfg, data, model_seed=42, snap_every=50)
     print(
         f"Final  best_val_mse={best_val_mse:.4f}"
@@ -524,7 +598,7 @@ def main():
         f"  stopped at epoch {len(hist['train_mse'])}"
     )
 
-    plot_results(hist, best_cfg, data, models, snapshots)
+    plot_results(hist, best_cfg, data, models, snapshots, z_init=z_init)
 
 
 if __name__ == "__main__":
