@@ -290,28 +290,28 @@ rule all:
             sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
         ),
         # # --- LD decay diagnostics ---
-        expand(
-            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        ),
-        *(expand(
-            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        ) if HAS_TARGET_TRAIN else []),
-        expand(
-            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        ),
-        # --- allele freq vs LD diagnostic ---
-        expand(
-            VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        ),
-        # --- baselines ---
-        expand(
-            PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES,
-        ),
+        # expand(
+        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
+        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        # ),
+        # *(expand(
+        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
+        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        # ) if HAS_TARGET_TRAIN else []),
+        # expand(
+        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
+        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        # ),
+        # # --- allele freq vs LD diagnostic ---
+        # expand(
+        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
+        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
+        # ),
+        # # --- baselines ---
+        # expand(
+        #     PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
+        #     sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        # ),
         
 # =============================================================================
 # 1. Run one simulation

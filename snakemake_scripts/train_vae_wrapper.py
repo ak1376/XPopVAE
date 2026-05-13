@@ -559,6 +559,30 @@ def main(
     )
 
     # ------------------------------------------------------------------
+    # trim all history lists to the best epoch before plotting/saving
+    # ------------------------------------------------------------------
+    n = best_epoch  # best_epoch is 1-based
+    train_loss_list              = train_loss_list[:n]
+    val_loss_list                = val_loss_list[:n]
+    train_recon_unmasked_list    = train_recon_unmasked_list[:n]
+    val_recon_unmasked_list      = val_recon_unmasked_list[:n]
+    train_recon_masked_list      = train_recon_masked_list[:n]
+    val_recon_masked_list        = val_recon_masked_list[:n]
+    train_kl_list                = train_kl_list[:n]
+    val_kl_list                  = val_kl_list[:n]
+    train_phenotype_loss_list    = train_phenotype_loss_list[:n]
+    val_phenotype_loss_list      = val_phenotype_loss_list[:n]
+    train_grl_loss_list          = train_grl_loss_list[:n]
+    train_grl_acc_list           = train_grl_acc_list[:n]
+    train_domain_clf_loss_list   = train_domain_clf_loss_list[:n]
+    train_domain_acc_list        = train_domain_acc_list[:n]
+    train_mmd_loss_list          = train_mmd_loss_list[:n]
+    train_z_task_var_list        = train_z_task_var_list[:n]
+    train_z_domain_var_list      = train_z_domain_var_list[:n]
+    train_ceu_frac_list          = train_ceu_frac_list[:n]
+    grl_lambda_list              = grl_lambda_list[:n]
+
+    # ------------------------------------------------------------------
     # save training history
     # ------------------------------------------------------------------
     history_dict = dict(

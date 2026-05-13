@@ -9,7 +9,7 @@
   },
   "seed": 42,
   "num_draws": 1,
-  "num_replicates": 5,
+  "num_replicates": 1,
   "priors": {
     "N_anc": [7310, 7310],
     "N_YRI_anc": [14474, 14474],
