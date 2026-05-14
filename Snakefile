@@ -137,20 +137,22 @@ COMPARE_LD_SCRIPT     = "snakemake_scripts/compare_ld_decay.py"
 DIAGNOSE_AF_LD_SCRIPT = "snakemake_scripts/diagnose_allelefreq_vs_ld.py"
 BASELINE_SCRIPT       = "snakemake_scripts/baseline_predictors.py"
 
-GWAS_SCRIPT = "snakemake_scripts/run_gwas.py"
-GWAS_SUMMARY_SCRIPT = "snakemake_scripts/run_gwas_summary.py"
- 
-GWAS_SUMMARY_DIR = Path(f"experiments/{MODEL}/gwas_summary")
+GWAS_SCRIPT         = "snakemake_scripts/run_gwas.py"
+GBLUP_SCRIPT        = "snakemake_scripts/run_prs.py"
+STANDARD_PRS_SCRIPT = "snakemake_scripts/run_standard_prs.py"
 # =============================================================================
 # Directories
 # =============================================================================
 
-SIM_BASEDIR  = Path(f"experiments/{MODEL}/simulations")
-PROC_BASEDIR = Path(f"experiments/{MODEL}/processed_data")
-VAE_BASEDIR  = Path(f"experiments/{MODEL}/vae")
-REPLICATE_DIAG_DIR = Path(f"experiments/{MODEL}/gwas_summary/sim_diagnostics")
+SIM_BASEDIR          = Path(f"experiments/{MODEL}/simulations")
+PROC_BASEDIR         = Path(f"experiments/{MODEL}/processed_data")
+VAE_BASEDIR          = Path(f"experiments/{MODEL}/vae")
+GWAS_BASEDIR         = Path(f"experiments/{MODEL}/gwas")
+GBLUP_BASEDIR        = Path(f"experiments/{MODEL}/gblup")
+STANDARD_PRS_BASEDIR = Path(f"experiments/{MODEL}/standard_prs")
 
-for d in (SIM_BASEDIR, PROC_BASEDIR, VAE_BASEDIR):
+for d in (SIM_BASEDIR, PROC_BASEDIR, VAE_BASEDIR,
+          GWAS_BASEDIR, GBLUP_BASEDIR, STANDARD_PRS_BASEDIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
@@ -268,19 +270,22 @@ rule all:
             PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
             sim_number=SIM_NUMBERS, replicate=REPLICATES,
         ),
+        # --- GWAS ---
         expand(
-            PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
+            GWAS_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
             sim_number=SIM_NUMBERS, replicate=REPLICATES,
         ),
-        GWAS_SUMMARY_DIR / "discovery_r2_vs_tooa.png",
-        GWAS_SUMMARY_DIR / "target_r2_vs_tooa.png",
-        GWAS_SUMMARY_DIR / "gwas_summary_table.csv",
+        # --- gBLUP ---
         expand(
-            REPLICATE_DIAG_DIR / "{sim_number}/af_diff_vs_r2_gap.png",
-            sim_number=SIM_NUMBERS,
+            GBLUP_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
         ),
-        
-        # # # # --- VAE checkpoints ---
+        # --- Standard PRS ---
+        expand(
+            STANDARD_PRS_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
+            sim_number=SIM_NUMBERS, replicate=REPLICATES,
+        ),
+        # --- VAE checkpoints ---
         expand(
             VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/best_model.pt",
             sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
@@ -289,30 +294,7 @@ rule all:
             VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/vae_outputs/checkpoints/final_model.pt",
             sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
         ),
-        # # --- LD decay diagnostics ---
-        # expand(
-        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_discovery_val/ld_decay_summary.txt",
-        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        # ),
-        # *(expand(
-        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_train/ld_decay_summary.txt",
-        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        # ) if HAS_TARGET_TRAIN else []),
-        # expand(
-        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/ld_decay_target_held_out/ld_decay_summary.txt",
-        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        # ),
-        # # --- allele freq vs LD diagnostic ---
-        # expand(
-        #     VAE_BASEDIR / "{sim_number}/rep{replicate}/{exp_id}/diagnostics/allelefreq_vs_ld_discovery_val/diagnostic_summary.txt",
-        #     sim_number=SIM_NUMBERS, replicate=REPLICATES, exp_id=EXP_IDS,
-        # ),
-        # # --- baselines ---
-        # expand(
-        #     PROC_BASEDIR / "{sim_number}/rep{replicate}/baselines/baseline_results.txt",
-        #     sim_number=SIM_NUMBERS, replicate=REPLICATES,
-        # ),
-        
+
 # =============================================================================
 # 1. Run one simulation
 # =============================================================================
@@ -392,10 +374,11 @@ rule run_gwas:
         target_geno       = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
         target_pheno      = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
     output:
-        summary           = PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
-        ridge_scatter     = PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/ridge_regression_scatter.png",
+        summary           = GWAS_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
+        beta_panel        = GWAS_BASEDIR / "{sim_number}/rep{replicate}/beta_panel.npy",
+        manhattan         = GWAS_BASEDIR / "{sim_number}/rep{replicate}/manhattan.png",
     params:
-        out_dir           = lambda wc: PROC_BASEDIR / wc.sim_number / f"rep{wc.replicate}" / "gwas",
+        out_dir           = lambda wc: GWAS_BASEDIR / wc.sim_number / f"rep{wc.replicate}",
     shell:
         r"""
         python {input.script} \
@@ -409,62 +392,58 @@ rule run_gwas:
             --summary-out      {output.summary}
         """
 
-rule gwas_summary:
+rule run_gblup:
     input:
-        script  = GWAS_SUMMARY_SCRIPT,
-        # Depend on every gwas_summary.json so this rule waits for all GWAS jobs
-        gwas_jsons = expand(
-            PROC_BASEDIR / "{sim_number}/rep{replicate}/gwas/gwas_summary.json",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES,
-        ),
-        # Also depend on sampled_params so T_OOA values are available
-        sampled_params = expand(
-            SIM_BASEDIR / "{sim_number}/rep{replicate}/sampled_params.pkl",
-            sim_number=SIM_NUMBERS, replicate=REPLICATES,
-        ),
+        script            = GBLUP_SCRIPT,
+        disc_train_geno   = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        disc_train_pheno  = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        disc_val_geno     = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+        disc_val_pheno    = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+        target_geno       = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+        target_pheno      = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
     output:
-        discovery_plot = GWAS_SUMMARY_DIR / "discovery_r2_vs_tooa.png",
-        target_plot    = GWAS_SUMMARY_DIR / "target_r2_vs_tooa.png",
-        csv            = GWAS_SUMMARY_DIR / "gwas_summary_table.csv",
+        summary           = GBLUP_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
     params:
-        proc_basedir = PROC_BASEDIR,
-        out_dir      = GWAS_SUMMARY_DIR,
-        sim_numbers  = " ".join(SIM_NUMBERS),
-        replicates   = " ".join(REPLICATES),
+        out_dir           = lambda wc: GBLUP_BASEDIR / wc.sim_number / f"rep{wc.replicate}",
     shell:
         r"""
         python {input.script} \
-            --proc-basedir {params.proc_basedir} \
-            --sim-numbers  {params.sim_numbers}  \
-            --replicates   {params.replicates}   \
-            --out-dir      {params.out_dir}
+            --disc-train-geno  {input.disc_train_geno}  \
+            --disc-train-pheno {input.disc_train_pheno} \
+            --disc-val-geno    {input.disc_val_geno}    \
+            --disc-val-pheno   {input.disc_val_pheno}   \
+            --target-geno      {input.target_geno}      \
+            --target-pheno     {input.target_pheno}     \
+            --out-dir          {params.out_dir}         \
+            --summary-out      {output.summary}
         """
 
-rule diagnose_replicates:
+rule run_standard_prs:
     input:
-        script     = GWAS_SUMMARY_SCRIPT,
-        gwas_jsons = lambda wc: expand(
-            PROC_BASEDIR / wc.sim_number / "rep{replicate}/gwas/gwas_summary.json",
-            replicate=REPLICATES,
-        ),
-        sampled_params = lambda wc: expand(
-            SIM_BASEDIR / wc.sim_number / "rep{replicate}/sampled_params.pkl",
-            replicate=REPLICATES,
-        ),
+        script            = STANDARD_PRS_SCRIPT,
+        disc_train_geno   = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_train.npy",
+        disc_train_pheno  = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_train_pheno.npy",
+        disc_val_geno     = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/discovery_validation.npy",
+        disc_val_pheno    = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/discovery_validation_pheno.npy",
+        target_geno       = PROC_BASEDIR / "{sim_number}/rep{replicate}/genotype_matrices/target_held_out.npy",
+        target_pheno      = PROC_BASEDIR / "{sim_number}/rep{replicate}/phenotypes/target_held_out_pheno.npy",
+        beta_panel        = GWAS_BASEDIR / "{sim_number}/rep{replicate}/beta_panel.npy",
     output:
-        plot = REPLICATE_DIAG_DIR / "{sim_number}/af_diff_vs_r2_gap.png",
-        csv  = REPLICATE_DIAG_DIR / "{sim_number}/replicate_stats.csv",
+        summary           = STANDARD_PRS_BASEDIR / "{sim_number}/rep{replicate}/summary.json",
     params:
-        out_dir    = lambda wc: REPLICATE_DIAG_DIR / wc.sim_number,
-        replicates = " ".join(REPLICATES),
+        out_dir           = lambda wc: STANDARD_PRS_BASEDIR / wc.sim_number / f"rep{wc.replicate}",
     shell:
         r"""
         python {input.script} \
-            --proc-basedir {PROC_BASEDIR} \
-            --sim-numbers  {wildcards.sim_number} \
-            --replicates   {params.replicates} \
-            --out-dir      {params.out_dir} \
-            --af-diff-plot
+            --disc-train-geno  {input.disc_train_geno}  \
+            --disc-train-pheno {input.disc_train_pheno} \
+            --disc-val-geno    {input.disc_val_geno}    \
+            --disc-val-pheno   {input.disc_val_pheno}   \
+            --target-geno      {input.target_geno}      \
+            --target-pheno     {input.target_pheno}     \
+            --beta-panel       {input.beta_panel}       \
+            --out-dir          {params.out_dir}         \
+            --summary-out      {output.summary}
         """
 # =============================================================================
 # 3. Write resolved VAE config

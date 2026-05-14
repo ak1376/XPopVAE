@@ -354,3 +354,38 @@ def reconstruct_argmax_genotypes(
             recon_batches.append(pred.cpu().numpy())
 
     return np.concatenate(recon_batches, axis=0)
+
+
+def calculate_normalization_statistics(
+    X_train: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    mean = np.mean(X_train, axis=0)
+    std = np.std(X_train, axis=0)
+    std = np.where(std == 0, 1.0, std)
+    return mean, std
+
+
+def plot_prs_scatter(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    split: str,
+    r2: float,
+    out_path: Path,
+    model_name: str = "gBLUP",
+) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(y_true, y_pred, alpha=0.4, s=15, edgecolors="none")
+    lims = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+    ax.plot(lims, lims, "r--", linewidth=1)
+    ax.set_xlabel("True (normalized)")
+    ax.set_ylabel("Predicted")
+    ax.set_title(f"{model_name} — {split}  ($R^2$={r2:.4f})")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def normalize(X: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    return (X - mean) / std

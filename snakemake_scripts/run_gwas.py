@@ -17,64 +17,49 @@ from src.gwas import run_gwas
 
 
 def main():
-    cli = argparse.ArgumentParser(description="Run GWAS (Ridge) for one sim/replicate")
-    cli.add_argument(
-        "--disc-train-geno", type=Path, required=True, help="discovery_train.npy"
-    )
-    cli.add_argument(
-        "--disc-train-pheno", type=Path, required=True, help="discovery_train_pheno.npy"
-    )
-    cli.add_argument(
-        "--disc-val-geno", type=Path, required=True, help="discovery_validation.npy"
-    )
-    cli.add_argument(
-        "--disc-val-pheno",
-        type=Path,
-        required=True,
-        help="discovery_validation_pheno.npy",
-    )
-    cli.add_argument(
-        "--target-geno", type=Path, required=True, help="target_held_out.npy"
-    )
-    cli.add_argument(
-        "--target-pheno", type=Path, required=True, help="target_held_out_pheno.npy"
-    )
-    cli.add_argument("--out-dir", type=Path, required=True, help="Output directory")
-    cli.add_argument(
-        "--summary-out", type=Path, required=True, help="Path to write summary JSON"
-    )
+    cli = argparse.ArgumentParser(description="Run marginal OLS GWAS for one sim/replicate")
+    cli.add_argument("--disc-train-geno",   type=Path, required=True, help="discovery_train.npy")
+    cli.add_argument("--disc-train-pheno",  type=Path, required=True, help="discovery_train_pheno.npy")
+    cli.add_argument("--disc-val-geno",     type=Path, required=True, help="discovery_validation.npy")
+    cli.add_argument("--disc-val-pheno",    type=Path, required=True, help="discovery_validation_pheno.npy")
+    cli.add_argument("--target-geno",       type=Path, required=True, help="target_held_out.npy")
+    cli.add_argument("--target-pheno",      type=Path, required=True, help="target_held_out_pheno.npy")
+    cli.add_argument("--variant-positions", type=Path, default=None,
+                     help="Optional .npy of variant positions in bp for Manhattan plot")
+    cli.add_argument("--out-dir",           type=Path, required=True, help="Output directory")
+    cli.add_argument("--summary-out",       type=Path, required=True, help="Path to write summary JSON")
     args = cli.parse_args()
 
     # ── load arrays ───────────────────────────────────────────────────────────
     X_train = np.load(args.disc_train_geno)
     y_train = np.load(args.disc_train_pheno).ravel()
-    X_val = np.load(args.disc_val_geno)
-    y_val = np.load(args.disc_val_pheno).ravel()
-    X_test = np.load(args.target_geno)
-    y_test = np.load(args.target_pheno).ravel()
+    X_val   = np.load(args.disc_val_geno)
+    y_val   = np.load(args.disc_val_pheno).ravel()
+    X_test  = np.load(args.target_geno)
+    y_test  = np.load(args.target_pheno).ravel()
 
     print(f"[run_gwas] X_train: {X_train.shape}  y_train: {y_train.shape}")
     print(f"[run_gwas] X_val:   {X_val.shape}    y_val:   {y_val.shape}")
     print(f"[run_gwas] X_test:  {X_test.shape}   y_test:  {y_test.shape}")
 
+    variant_positions = (
+        np.load(args.variant_positions) if args.variant_positions is not None else None
+    )
+
     # ── run ───────────────────────────────────────────────────────────────────
     metrics = run_gwas(
-        X_train,
-        y_train,
-        X_val,
-        y_val,
-        X_test,
-        y_test,
+        X_train, y_train,
+        X_val,   y_val,
+        X_test,  y_test,
         out_dir=args.out_dir,
+        variant_positions=variant_positions,
     )
 
     # ── write summary ─────────────────────────────────────────────────────────
     args.summary_out.parent.mkdir(parents=True, exist_ok=True)
     args.summary_out.write_text(json.dumps(metrics, indent=2))
     print(f"[run_gwas] Summary written to {args.summary_out}")
-    print(
-        f"[run_gwas] Done. Val R²={metrics['val_r2']:.4f}  Test R²={metrics['test_r2']:.4f}"
-    )
+    print(f"[run_gwas] Done. Val R²={metrics['val_r2']:.4f}  Test R²={metrics['test_r2']:.4f}")
 
 
 if __name__ == "__main__":

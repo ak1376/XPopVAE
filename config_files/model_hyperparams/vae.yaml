@@ -52,17 +52,23 @@ domain_adaptation:
   grl_hidden_dim: null
   lambda_max: 1.0
   delta: 5.0              # weight for GRL loss (and MMD if use_mmd=true)
-  use_mmd: true          # MMD alignment loss on z_task
+  use_mmd: false          # MMD alignment loss on z_task
   use_domain_clf: true   # cooperative domain classifier on z_domain
   domain_clf_hidden_dim: null
   lam_domain: 1.0         # weight for cooperative domain clf loss
-seed: 0
+seed: 295
 grid:
   enabled: false
   name:
     prefix: "vae"
     sep: "__"
   dims:
-        - path: "domain_adaptation.delta"
-          values: [0, 1, 5, 10]
-          tag: "mmd_delta"
+      # - path: "domain_adaptation.delta"
+      #   values: [0, 1, 5, 10]
+      #   tag: "mmd_delta"
+      # - path: "domain_adaptation.use_mmd"
+      #   values: [True, False]
+      #   tag: "use_mmd"
+        - path: "domain_adaptation.lam_domain"
+          values: [0, 0.5, 1.0, 1.5, 2, 10]
+          tag: "domain_clf_lambda"
