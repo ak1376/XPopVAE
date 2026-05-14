@@ -2,12 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import random
 from pathlib import Path
 import sys
 
 import numpy as np
 import torch
 import yaml
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 from torch.utils.data import DataLoader, TensorDataset
 
 """
@@ -48,7 +58,7 @@ from src.plotting import (
     plot_latent_pca_shared_basis,
     plot_latent_activation_movie,
 )
-from src.train import evaluate, train_one_epoch
+from src.train import compute_grl_lambda, evaluate, train_one_epoch
 
 from src.utils import (
     extract_latent,
@@ -78,6 +88,10 @@ def main(
     output_dir: Path,
 ):
     vae_config = load_vae_config(vae_config_path)
+
+    seed = int(vae_config.get("seed", 0))
+    set_global_seed(seed)
+    print(f"Global seed set to {seed}")
 
     # ------------------------------------------------------------------
     # output directories
@@ -217,7 +231,10 @@ def main(
     )
 
     train_ds = TensorDataset(training_geno_t, training_pheno_t, training_pop_t)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
 
     # ------------------------------------------------------------------
     # evaluation loaders
