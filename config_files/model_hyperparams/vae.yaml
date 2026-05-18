@@ -45,7 +45,7 @@ masking:
   constant_value: -1.0
 phenotype:
   pheno_hidden_dim: null
-  gamma: 0.6
+  gamma: 1.0
   pheno_weight_decay: 0.0
 domain_adaptation:
   use_grl: false          # adversarial GRL classifier on z_task
@@ -58,17 +58,23 @@ domain_adaptation:
   lam_domain: 1.0         # weight for cooperative domain clf loss
 seed: 295
 grid:
-  enabled: false
+  enabled: true
   name:
     prefix: "vae"
     sep: "__"
   dims:
+        - path: "domain_adaptation.use_domain_clf"
+          values: [True, False]
+          tag: "domain_clf"
       # - path: "domain_adaptation.delta"
       #   values: [0, 1, 5, 10]
       #   tag: "mmd_delta"
       # - path: "domain_adaptation.use_mmd"
       #   values: [True, False]
       #   tag: "use_mmd"
-        - path: "domain_adaptation.lam_domain"
-          values: [0, 0.5, 1.0, 1.5, 2, 10]
-          tag: "domain_clf_lambda"
+      # - path: "domain_adaptation.lam_domain"
+      #   values: [0, 0.5, 1.0, 1.5, 2, 10]
+      #   tag: "domain_clf_lambda"
+      # - path: "domain_adaptation.use_domain_clf"
+      #   values: [True, False]
+      #   tag: "domain_clf"

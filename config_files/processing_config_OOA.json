@@ -4,7 +4,7 @@
   "target_held_out_frac": 0.8,
   "seed": 42,
   "num_causal_variants": 200,
-  "heritability": 1.0,
+  "heritability": 0.7,
   "trait_distribution": "normal",
   "trait_distribution_parameters": {
     "mean": 0,
