@@ -76,9 +76,10 @@ def build_experiment_grid(base_cfg):
 # Load config files
 # =============================================================================
 
-SIM_CFG_PATH  = Path("/sietch_colab/akapoor/XPopVAE/config_files/simulation_config_OOA.json")
-PROC_CFG_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/processing_config_OOA.json")
-VAE_YAML_PATH = Path("/sietch_colab/akapoor/XPopVAE/config_files/model_hyperparams/vae.yaml")
+REPO_ROOT     = Path(workflow.snakefile).parent
+SIM_CFG_PATH  = REPO_ROOT / "config_files/simulation_config_OOA.json"
+PROC_CFG_PATH = REPO_ROOT / "config_files/processing_config_OOA.json"
+VAE_YAML_PATH = REPO_ROOT / "config_files/model_hyperparams/vae.yaml"
 
 SIM_CFG  = json.loads(SIM_CFG_PATH.read_text())
 PROC_CFG = json.loads(PROC_CFG_PATH.read_text())

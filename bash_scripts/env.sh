@@ -9,6 +9,8 @@ MODEL="OOA"
 SIM_CFG="$ROOT/config_files/simulation_config_OOA.json"
 VAE_YAML="$ROOT/config_files/model_hyperparams/vae.yaml"
 
+export PYTHONPATH="${ROOT}:${PYTHONPATH:-}"
+
 NUM_DRAWS=$(python -c "import json; print(json.load(open('$SIM_CFG'))['num_draws'])")
 NUM_REPLICATES=$(python -c "import json; print(json.load(open('$SIM_CFG'))['num_replicates'])")
 SIM_NUMBER=0  # index within NUM_DRAWS; if num_draws > 1 this must be parameterized
