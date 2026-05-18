@@ -16,7 +16,7 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.demes_models import IM_symmetric_model, OOA
+from demes_models import IM_symmetric_model, OOA
 
 # ──────────────────────────────────
 # Minimal helpers
