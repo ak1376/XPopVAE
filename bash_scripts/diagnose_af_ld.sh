@@ -28,7 +28,7 @@ conda activate PRS
 
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
-source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "/projects/kernlab/akapoor/XPopVAE/bash_scripts/env.sh"
 
 REPLICATE=$(( SLURM_ARRAY_TASK_ID / NUM_EXP_IDS ))
 EXP_IDX=$(( SLURM_ARRAY_TASK_ID % NUM_EXP_IDS ))

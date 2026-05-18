@@ -17,7 +17,7 @@ set -eo pipefail
 source ~/miniforge3/etc/profile.d/conda.sh
 conda activate PRS
 
-source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+source "/projects/kernlab/akapoor/XPopVAE/bash_scripts/env.sh"
 
 REPLICATE=$SLURM_ARRAY_TASK_ID
 
